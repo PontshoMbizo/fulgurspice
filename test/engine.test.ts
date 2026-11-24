@@ -4,6 +4,7 @@ import { Simulation } from 'eecircuit-engine';
 import { compile } from '../src/core/netlist';
 import type { Part, Schematic } from '../src/core/types';
 import { makeSubckt } from '../src/core/extract';
+import { evaluate, parseMeasurements, withDerived } from '../src/sim/analysis';
 import { EXAMPLES } from '../src/core/examples';
 import { MODELS } from '../src/core/symbols';
 import type { Analysis } from '../src/core/types';
@@ -125,6 +126,56 @@ describe('ngspice end to end', () => {
     const r = await runNetlist(c.netlist, 'op');
     expect(r.ok).toBe(true);
     expect(vec(r, 'v(out)').re[0]).toBeCloseTo(5, 6); // R = 1k default, over 1k
+  });
+  it('trace math on a real AC run: V(out)/V(in) is 1/(1+sτ), and db() and ph() read off its gain and phase', async () => {
+    const r = await runExample(/AC sweep/);
+    const h = evaluate('V(out)/V(in)', r);
+    expect(h.ok).toBe(true);
+    if (!h.ok) return;
+    const tau = 1e3 * 100e-9;
+    r.x!.re.forEach((f, i) => {
+      const w = 2 * Math.PI * f * tau;
+      expect(h.vector.re[i]).toBeCloseTo(1 / (1 + w * w), 6);
+      expect(h.vector.im![i]).toBeCloseTo(-w / (1 + w * w), 6);
+    });
+    const db = evaluate('db(V(out)/V(in))', r), ph = evaluate('ph(V(out)/V(in))', r);
+    // the grid point nearest the corner 1/(2πτ) = 1591.55 Hz
+    const k = r.x!.re.reduce((best, f, i) => (Math.abs(f - 1591.55) < Math.abs(r.x!.re[best] - 1591.55) ? i : best), 0);
+    const w = 2 * Math.PI * r.x!.re[k] * tau;
+    expect(db.ok && db.vector.re[k]).toBeCloseTo(-10 * Math.log10(1 + w * w), 6);
+    expect(ph.ok && ph.vector.re[k]).toBeCloseTo((-Math.atan(w) * 180) / Math.PI, 6);
+    expect(r.x!.re[k]).toBeGreaterThan(1500); expect(r.x!.re[k]).toBeLessThan(1700);
+  });
+  it('trace math on a real transient run: V(in)-V(out) is the voltage across R1, and times I(R1) is its power', async () => {
+    const r = await runExample(/transient/);
+    const { result: d, errors } = withDerived(r, ['V(in)-V(out)', 'V(in)*I(V1)', 'I(R1)']);
+    expect(errors).toEqual({});
+    const drop = d.vectors.find((v) => v.name === 'V(in)-V(out)')!;
+    const ir = vec(r, 'i(@r1[i])');
+    // Ohm: the drop across R1 is 1k times its current at every point. R1 is wired (out, in), so
+    // ngspice's current, which flows pin 1 to pin 2, is the negative of the drop's direction.
+    for (let i = 0; i < r.points; i += 17) expect(drop.re[i]).toBeCloseTo(-1e3 * ir.re[i], 6);
+    expect(drop.unit).toBe('V');
+    expect(d.vectors.find((v) => v.name === 'V(in)*I(V1)')!.unit).toBe('W');
+    expect(evaluate('I(R1)', r).ok).toBe(true); // label form finds i(@r1[i])
+  });
+  it('.meas lines in the directives come back in the log, ready to parse (so grading can use them)', async () => {
+    const s = EXAMPLES.find((e) => /transient/.test(e.name))!.build();
+    const c = compile({ ...s, directives: '.meas tran vmax MAX v(out)\n.meas tran vpp PP v(out)\n.meas tran never FIND v(out) AT=99' });
+    expect(c.ok).toBe(true);
+    sim.setNetList(c.netlist);
+    const raw = await sim.runSim();
+    const res = normalise(raw, 'tran', sim.getError(), sim.getInfo(), 0);
+    const m = parseMeasurements(res.log);
+    // the unreachable AT=99 fails, but only itself: the waveforms and the other measurements survive
+    expect(res.ok).toBe(true);
+    expect(res.points).toBeGreaterThan(100);
+    expect(m.map((x) => x.name)).toEqual(expect.arrayContaining(['vmax', 'vpp', 'never']));
+    expect(m.find((x) => x.name === 'never')!.value).toBeNull();
+    const vmax = m.find((x) => x.name === 'vmax')!.value!;
+    const peakOut = Math.max(...vec(res, 'v(out)').re);
+    expect(vmax).toBeCloseTo(peakOut, 2); // ngspice interpolates, the sample peak is close
+    expect(m.find((x) => x.name === 'vpp')!.value!).toBeGreaterThan(1.5);
   });
   it('half-wave rectifier: output peaks one diode drop below 5 V and never goes negative', async () => {
     const r = await runExample(/rectifier/);

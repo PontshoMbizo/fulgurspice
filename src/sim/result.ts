@@ -9,7 +9,7 @@ export interface Vector {
   name: string;
   /** LTspice-style label: V(out), I(V1), I(R1) */
   label: string;
-  unit: 'V' | 'A' | 's' | 'Hz' | '';
+  unit: 'V' | 'A' | 's' | 'Hz' | 'W' | 'Ω' | 'dB' | '°' | '';
   re: Float64Array;
   /** Present for AC analysis only. */
   im?: Float64Array;
@@ -47,7 +47,8 @@ const UNIT = { voltage: 'V', current: 'A', time: 's', frequency: 'Hz', notype: '
 export function normalise(raw: ResultType | null, kind: Analysis['kind'], errors: string[], log: string, ms: number): SimResult {
   // Notes ("DC 0 assumed", "Starting source stepping") stay in the log; warnings and errors are surfaced.
   const messages = [...new Set(errors.map((e) => e.trim()).filter((e) => e && !/^note:/i.test(e)))];
-  const failed = !raw || raw.numPoints === 0 || raw.data.length === 0 || messages.some((m) => /^error\b|circuit not parsed|simulation interrupted/i.test(m));
+  // A .meas that cannot be evaluated is reported as an error line but the run itself is fine: keep the data.
+  const failed = !raw || raw.numPoints === 0 || raw.data.length === 0 || messages.some((m) => /circuit not parsed|simulation interrupted/i.test(m) || (/^error\b/i.test(m) && !/^error:\s*measure\b/i.test(m)));
   if (failed || !raw) return { kind, ok: false, x: null, vectors: [], points: 0, messages: messages.length ? messages : ['ngspice produced no data'], log, ms };
 
   const all: Vector[] = raw.dataType === 'complex'
@@ -70,6 +71,9 @@ export function explain(message: string): string | null {
   if (node) return `Node "${node[1]}" has no DC path to ground (floating). Connect it, or add a large resistor to ground.`;
   if (/timestep too small/i.test(message)) return 'The solver could not converge. Try a smaller time step, add a little series resistance, or check for ideal loops of sources and capacitors.';
   if (/could not find a valid modelname|unknown model|unable to find definition of model/i.test(message)) return 'A part names a model that is not defined. Use a built-in model or add a .model line under SPICE directives.';
+  const meas = /^error:\s*measure\s+(\S+)/i.exec(message);
+  if (meas) return `Measurement "${meas[1]}" could not be evaluated: the event it looks for never happens in this run, or its syntax is wrong. The waveforms are fine.`;
+  if (/unimplemented dot command '\.step'/i.test(message)) return 'ngspice has no .step. Use the Sweep setting under Analysis to repeat the run for several values.';
   if (/no dc path to ground/i.test(message)) return 'Part of the circuit is isolated from ground.';
   return null;
 }
