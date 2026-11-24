@@ -364,7 +364,7 @@ export function SchematicCanvas(props: Props) {
         {tool === 'wire' ? (draft ? 'Click to bend · click a pin or wire to finish · Esc to stop' : 'Click to start a wire')
           : tool === 'place' ? 'Click to place · R rotate · X mirror · Esc when done'
           : tool === 'probe' ? 'Click a wire to plot its voltage · click a part to plot its current'
-          : sch.parts.length === 0 ? 'Pick a part on the left, or open File > Examples' : ''}
+          : sch.parts.length === 0 ? 'Press A to add a part, or open File > Examples' : ''}
       </div>
     </div>
   );

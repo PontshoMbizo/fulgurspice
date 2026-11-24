@@ -21,7 +21,7 @@ Simulink-style block simulator backed by Scilab) and deliberately shares its des
 4. **Everything is on an integer grid** (1 unit = 10 px at 100 %). Connectivity is coordinate
    equality: a pin or wire end anywhere on a wire connects; crossing wires do not.
 5. **One table for parts.** A new part is one entry in `SYMBOLS` (`src/core/symbols.ts`): geometry,
-   pins, default value, SPICE card. Palette, canvas and netlister read from it.
+   pins, default value, SPICE card. The `A` search box, canvas and netlister read from it (there is no side palette).
 5b. **Subcircuits are sheets.** `Schematic.subckts` holds definitions (parts + wires, ports are `PORT`
    parts); an instance is a `SUBCKT` part whose `value` is the definition's name and whose `ports`
    snapshot (kept in step by `syncInstances`) lays out its pins. The one exception to "geometry comes
@@ -45,7 +45,7 @@ Simulink-style block simulator backed by Scilab) and deliberately shares its des
 - Vector names stay as ngspice reports them (`v(out)`, `i(@r1[i])`); `vectorLabel()` makes the
   display form (`V(out)`, `I(R1)`).
 - Visual language: grey desktop chrome (from fulgurlab), KiCad default colours on the sheet
-  (green wires, dark-red symbols, teal text, cream background), black LTspice plot. Tokens are at
+  (green wires, dark-red symbols, teal text, cream background), light plot on the same panel as the other dock tabs. Tokens are at
   the top of `src/styles.css`.
 - Every example in `src/core/examples.ts` is also a test fixture; a new example needs a physics
   assertion in `test/engine.test.ts`.

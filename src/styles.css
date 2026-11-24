@@ -88,17 +88,9 @@ html, body, #root { height: 100%; margin: 0; }
 .btn:disabled { color: #8a8a8a; background: #ececec; border-color: #d0d0d0; }
 
 /* -------------------------------------------------------------- workspace */
-.workspace { display: grid; grid-template-columns: 196px minmax(0, 1fr) 256px; min-height: 0; flex: 1; }
+.workspace { display: grid; grid-template-columns: minmax(0, 1fr) 256px; min-height: 0; flex: 1; }
 .panel-title { padding: 4px 8px; background: #e9e9e9; border-bottom: 1px solid #d0d0d0; font-weight: 600; flex: none; }
 
-.palette { display: flex; flex-direction: column; min-height: 0; background: #fff; border-right: 1px solid var(--frame); }
-.palette-tree { overflow-y: auto; padding: 4px 4px 16px; flex: 1; }
-.palette-group { padding: 6px 4px 2px; font-weight: 600; }
-.palette ul { list-style: none; margin: 0; padding: 0; }
-.palette li button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 2px 6px; background: none; border: 1px solid transparent; text-align: left; cursor: default; }
-.palette li button:hover { background: var(--hover); border-color: var(--pressed); }
-.palette li button[aria-pressed='true'] { background: var(--pressed); border-color: var(--hover-border); }
-.palette-glyph { flex: none; background: var(--sheet); border: 1px solid var(--rule); }
 
 .canvas-wrap { position: relative; min-width: 0; min-height: 0; background: var(--sheet); overflow: hidden; display: flex; }
 .canvas { display: block; flex: 1; min-width: 0; width: 100%; height: 100%; touch-action: none; user-select: none; cursor: default; }
@@ -125,7 +117,7 @@ html, body, #root { height: 100%; margin: 0; }
 .wire { fill: none; stroke: var(--wire); stroke-width: 1.6; stroke-linecap: square; vector-effect: non-scaling-stroke; }
 .wire.is-selected { stroke: var(--select); stroke-width: 2.4; }
 /* a plotted net is marked in its trace colour, highlighter-style, under the wire */
-.wire-probe { fill: none; stroke-width: 7; stroke-linecap: round; vector-effect: non-scaling-stroke; opacity: 0.8; pointer-events: none; }
+.wire-probe { fill: none; stroke-width: 7; stroke-linecap: round; vector-effect: non-scaling-stroke; opacity: 0.45; pointer-events: none; }
 .wire.is-draft { stroke-dasharray: 5 4; pointer-events: none; }
 .wire-hit { fill: none; stroke: transparent; stroke-width: 10; vector-effect: non-scaling-stroke; }
 .junction { fill: var(--wire); }
@@ -164,22 +156,28 @@ html, body, #root { height: 100%; margin: 0; }
 .dock-tab > .dock-tab-close:hover { color: #c00; }
 .dock-tab > button:focus-visible { outline: 1px dotted #000; outline-offset: -2px; }
 .dock-tab.is-active { background: #fff; font-weight: 600; }
-.trace-chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 2px 0 6px; height: 20px; background: #000; border: 1px solid #555; font-family: var(--mono); font-size: 11px; }
-.trace-chip button { all: unset; cursor: pointer; padding: 0 4px; color: #bbb; }
-.trace-chip button:hover { color: #fff; }
+.trace-chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 2px 0 6px; height: 20px; background: #fff; border: 1px solid var(--frame); font-family: var(--mono); font-size: 11px; font-weight: 600; }
+.trace-chip button { all: unset; cursor: pointer; padding: 0 4px; color: var(--ink-3); font-weight: 400; }
+.trace-chip button:hover { color: var(--danger); }
 .dock-titlerow select { height: 22px; border: 1px solid var(--field-border); background: #fff; border-radius: 0; }
 .dock-note { margin-left: auto; color: var(--ink-2); font-size: 11px; }
+.dock-hide { margin-left: auto; padding: 0 8px; height: 20px; background: var(--btn); border: 1px solid var(--btn-border); border-radius: 0; cursor: default; }
+.dock-hide:hover { background: var(--hover); border-color: var(--hover-border); }
+.dock-note + .dock-hide { margin-left: 8px; }
+.status-toggle { background: none; border: 0; border-left: 1px solid #c8c8c8; cursor: default; font: inherit; color: inherit; }
+.status-toggle:hover { background: var(--hover); }
 .dock-body { flex: 1; min-height: 0; position: relative; display: flex; }
-.plot { flex: 1; min-width: 0; position: relative; background: #000; }
+.plot { flex: 1; min-width: 0; position: relative; background: #fff; }
 .plot canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
 .plot-tools { position: absolute; top: 3px; right: 6px; display: flex; gap: 4px; }
-.plot-tools .btn { padding: 0 8px; height: 20px; background: rgb(40 40 40 / 0.9); color: #ddd; border: 1px solid #666; }
-.plot-tools .btn[aria-pressed='true'] { background: #3a5f8f; border-color: #8ab4f8; color: #fff; }
+.plot-tools .btn { padding: 0 8px; height: 20px; background: var(--btn); color: var(--ink); border: 1px solid var(--btn-border); border-radius: 0; }
+.plot-tools .btn:hover:not(:disabled) { background: var(--hover); border-color: var(--hover-border); }
+.plot-tools .btn[aria-pressed='true'] { background: var(--pressed); border-color: var(--hover-border); }
 .plot-tools .btn:disabled { opacity: 0.45; }
 .expr-input { width: 190px; height: 20px; padding: 0 6px; border: 1px solid var(--field-border); border-radius: 0; font-family: var(--mono); font-size: 12px; }
 .hint.is-error { color: #b00020; }
 .op-table td.is-error { color: #b00020; font-weight: 600; }
-.plot-empty { position: absolute; inset: 0; display: grid; place-items: center; color: #9a9a9a; text-align: center; padding: 16px; pointer-events: none; }
+.plot-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-3); text-align: center; padding: 16px; pointer-events: none; }
 .dock-text { flex: 1; margin: 0; padding: 8px 12px; overflow: auto; background: #fff; font-family: var(--mono); font-size: 11.5px; white-space: pre; }
 .dock-pane { flex: 1; overflow: auto; padding: 8px 12px; background: #fff; }
 .sim-error { color: var(--danger); }
@@ -191,11 +189,6 @@ html, body, #root { height: 100%; margin: 0; }
 .op-table td.num { text-align: right; }
 
 .sheet-crumb { display: inline-flex; align-items: center; gap: 4px; margin-left: 12px; }
-.palette-subckt { display: flex; align-items: center; }
-.palette-subckt > button:first-child { flex: 1; min-width: 0; }
-.palette li.palette-subckt .palette-mini { width: 20px; padding: 2px 0; justify-content: center; color: var(--ink-3); }
-.palette li.palette-subckt .palette-mini:hover { color: #000; }
-.palette-new span { color: var(--ink-3); padding-left: 38px; }
 
 .part.is-bench { opacity: 0.6; }
 .part.is-bench .sym { stroke-dasharray: 3 2; }
@@ -218,6 +211,6 @@ html, body, #root { height: 100%; margin: 0; }
 .overlay-actions { display: flex; justify-content: flex-end; gap: 6px; padding: 8px; }
 
 @media (max-width: 900px) {
-  .workspace { grid-template-columns: 150px minmax(0, 1fr); }
+  .workspace { grid-template-columns: minmax(0, 1fr); }
   .inspector { display: none; }
 }

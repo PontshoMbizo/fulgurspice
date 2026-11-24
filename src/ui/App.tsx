@@ -9,7 +9,6 @@ import { explain, type SimResult } from '../sim/result';
 import { IconDelete, IconFit, IconMirror, IconProbe, IconRedo, IconRotate, IconRun, IconSelect, IconStop, IconUndo, IconWire } from './Icons';
 import { Inspector } from './Inspector';
 import { MenuBar } from './Menus';
-import { Palette } from './Palette';
 import { QuickAdd } from './QuickAdd';
 import { SchematicCanvas, type Placing, type ProbeTarget, type Tool } from './SchematicCanvas';
 import { addSubckt, copyItems, deleteItems, docReducer, loadSaved, parseSchematic, pasteItems, patchParts, removeSubckt, removeWireSpan, rotated, saveLocal, sheetOf, subcktNameProblem, type Clipboard, type Doc } from './store';
@@ -71,6 +70,8 @@ export function App() {
   const [exprs, setExprs] = useState<string[]>([]);
   const [exprText, setExprText] = useState('');
   const [dockH, setDockH] = useState(280);
+  // The whole bottom panel (waveform, measurements, netlist, log) can be put away; a run brings it back.
+  const [dockOpen, setDockOpen] = useState(true);
   const [fitToken, setFitToken] = useState(0);
   const [cursor, setCursor] = useState<Point | null>(null);
   const [zoom, setZoom] = useState(2);
@@ -118,7 +119,7 @@ export function App() {
         }
         r = failed ?? mergeSweep(sweep.param, sweep.values.map((v) => v.tag), runs);
       } else r = await client.run(target.netlist, sch.analysis.kind);
-      setResult(r); setResultOf(alone ? editing : null); setTab('wave'); setWaveOpen(true);
+      setResult(r); setResultOf(alone ? editing : null); setTab('wave'); setWaveOpen(true); setDockOpen(true);
       if (!r.ok) { say(explain(r.messages[0]) ?? r.messages[0], true); return; }
       const goodExprs = exprs.filter((e) => evaluate(e, r).ok);
       setExprs(goodExprs);
@@ -140,7 +141,7 @@ export function App() {
   }, [busy, client, compiled, sch, sheet, bench, editing, exprs, sweep]);
 
   const stop = () => client.cancel();
-  const showWave = () => { setWaveOpen(true); setTab('wave'); };
+  const showWave = () => { setWaveOpen(true); setTab('wave'); setDockOpen(true); };
   const closeWave = () => { setWaveOpen(false); setTab((t) => (t === 'wave' ? 'netlist' : t)); };
 
   const toggleTrace = (name: string) => setTraces((t) => (t.includes(name) ? t.filter((x) => x !== name) : [...t, name]));
@@ -279,6 +280,7 @@ export function App() {
       else if (mod && key === 'c') { if (copy()) e.preventDefault(); }
       else if (mod && key === 'x') { e.preventDefault(); cut(); }
       else if (mod && key === 'v') { e.preventDefault(); paste(); }
+      else if (mod && key === 'j') { e.preventDefault(); setDockOpen((o) => !o); }
       else if (mod && key === 'd') { e.preventDefault(); duplicate(); }
       else if (mod || e.altKey) return;
       else if (e.key === 'Escape') { if (editing !== null && tool === 'select' && !selected.length) closeSubckt(); else cancelTool(); }
@@ -368,6 +370,7 @@ export function App() {
             { label: 'New subcircuit…', run: () => setNaming('new') },
             { label: 'Make subcircuit from selection…', disabled: !selected.length, run: askMakeSubckt },
             { label: 'Top sheet', disabled: editing === null, run: closeSubckt },
+            ...(sch.subckts.length ? [{ separator: true } as const, { heading: 'Edit subcircuit' } as const, ...sch.subckts.map((d) => ({ label: d.name, run: () => openSubckt(d.name) }))] : []),
           ] },
           { title: 'Simulate', items: [
             { label: editing !== null && bench ? `Run ${editing} on its own` : 'Run', shortcut: 'F5', disabled: busy, run: () => void run() },
@@ -375,11 +378,12 @@ export function App() {
             { label: 'Stop', disabled: !busy, run: stop },
             { separator: true },
             { label: 'Probe', shortcut: 'P', run: () => { setTool('probe'); setPlacing(null); } },
-            { label: 'Show netlist', run: () => setTab('netlist') },
+            { label: 'Show netlist', run: () => { setTab('netlist'); setDockOpen(true); } },
           ] },
           { title: 'View', items: [
             { label: 'Zoom to fit', shortcut: 'F', run: () => setFitToken((t) => t + 1) },
-            { label: 'Show waveform', disabled: waveOpen && tab === 'wave', run: showWave },
+            { label: 'Bottom panel', shortcut: 'Ctrl+J', run: () => setDockOpen((o) => !o) },
+            { label: 'Show waveform', disabled: dockOpen && waveOpen && tab === 'wave', run: showWave },
           ] },
         ]} />
         {editing !== null && (
@@ -412,19 +416,15 @@ export function App() {
       </div>
 
       <div className="workspace">
-        <Palette
-          active={tool === 'place' ? placing?.kind ?? null : null} activeSubckt={tool === 'place' && placing?.kind === 'SUBCKT' ? placing.value ?? null : null}
-          subckts={sch.subckts} onPick={pick} onPickSubckt={pickSubckt} onOpenSubckt={openSubckt} onNewSubckt={() => setNaming('new')} onDeleteSubckt={deleteSubckt}
-        />
         <SchematicCanvas
           sch={sheet} compiled={view} selection={selection} tool={tool} placing={placing}
           probeColors={resultOf === editing ? probeColors : new Map()} opValues={resultOf === editing ? opValues : null} errorParts={errorParts} fitToken={fitToken}
           onCommit={commit} onSelect={setSelected} onProbe={onProbe} onCancel={cancelTool} onCursor={setCursor} onZoom={setZoom} onOpenSubckt={openSubckt}
         />
-        <Inspector sch={sheet} compiled={view} selection={selection} onCommit={commit} onSelect={setSelected} onRotate={rotate} onMirror={mirror} onDelete={del} editing={editing} onOpenSubckt={openSubckt} onRoot={onRoot} onRenameSubckt={renameOpen} onSubcktParams={setSubcktParams} onMakeSubckt={askMakeSubckt} />
+        <Inspector sch={sheet} compiled={view} selection={selection} onCommit={commit} onSelect={setSelected} onRotate={rotate} onMirror={mirror} onDelete={del} editing={editing} onOpenSubckt={openSubckt} onRoot={onRoot} onRenameSubckt={renameOpen} onSubcktParams={setSubcktParams} onMakeSubckt={askMakeSubckt} onDeleteSubckt={() => { if (editing !== null) { deleteSubckt(editing); setEdit(null); } }} />
       </div>
 
-      <div className="dock" style={{ height: dockH }}>
+      {dockOpen && <div className="dock" style={{ height: dockH }}>
         <div className="dock-grip" onPointerDown={dragDock} />
         <div className="dock-titlerow">
           <div className="dock-tabs" role="tablist">
@@ -458,6 +458,7 @@ export function App() {
               <span className="dock-note">drag: zoom · wheel: y zoom · click: cursors A, B · dbl-click: reset</span>
             </>
           )}
+          <button type="button" className="dock-hide" title="Hide the bottom panel (Ctrl+J)" aria-label="Hide the bottom panel" onClick={() => setDockOpen(false)}>Hide ⌄</button>
         </div>
         <div className="dock-body">
           {tab === 'netlist' && <pre className="dock-text">{(bench ?? compiled).netlist}</pre>}
@@ -497,13 +498,14 @@ export function App() {
             <WaveformViewer result={shown!} traces={traces} stacked={stacked} onStacked={setStacked} fileBase={sch.title} />
           ))}
         </div>
-      </div>
+      </div>}
 
       {quickAdd && <QuickAdd subckts={sch.subckts} onClose={() => setQuickAdd(false)} onPick={(kind) => { setQuickAdd(false); pick(kind); }} onPickSubckt={(name) => { setQuickAdd(false); pickSubckt(name); }} />}
       {naming && <NamePrompt title={naming === 'new' ? 'New subcircuit' : 'Make subcircuit from selection'} problem={(n) => subcktNameProblem(sch, n)} onSubmit={naming === 'new' ? createSubckt : makeFromSelection} onClose={() => setNaming(null)} />}
 
       <div className="statusbar">
         <span className={`status-main${status.error ? ' is-error' : ''}`} role="status">{status.text}</span>
+        <button type="button" className="status-cell status-toggle" aria-pressed={dockOpen} title="Show or hide the bottom panel (Ctrl+J)" onClick={() => setDockOpen((o) => !o)}>{dockOpen ? 'Panel ⌄' : 'Panel ⌃'}</button>
         <span className="status-cell mono">{cursor ? `x ${cursor.x}  y ${cursor.y}` : 'x –  y –'}</span>
         <span className="status-cell mono">{Math.round(zoom * 50)}%</span>
         <span className="status-cell">{sheet.parts.filter((p) => p.ref).length} parts · {view.nodes.length} nets</span>

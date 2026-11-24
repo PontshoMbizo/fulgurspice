@@ -65,9 +65,11 @@ interface Props {
   onRenameSubckt: (name: string) => void;
   onSubcktParams: (params: string) => void;
   onMakeSubckt: () => void;
+  /** Delete the open subcircuit (instances of it keep their name and report it missing). */
+  onDeleteSubckt: () => void;
 }
 
-export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRotate, onMirror, onDelete, editing, onOpenSubckt, onRoot, onRenameSubckt, onSubcktParams, onMakeSubckt }: Props) {
+export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRotate, onMirror, onDelete, editing, onOpenSubckt, onRoot, onRenameSubckt, onSubcktParams, onMakeSubckt, onDeleteSubckt }: Props) {
   const parts = sch.parts.filter((p) => selection.has(p.id));
   const part = selection.size === 1 && parts.length === 1 ? parts[0] : null;
   const def = part ? symbolFor(part) : null;
@@ -167,6 +169,7 @@ export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRota
               <legend>Subcircuit</legend>
               <Field label="Name" value={editing} mono hint="Renames every instance too" onCommit={onRenameSubckt} />
               <Field label="Parameters" value={defParams} mono hint="Defaults, e.g. R=1k C=100n. Use them in values as {R}" onCommit={onSubcktParams} />
+              <div className="row-buttons"><button type="button" className="btn btn-delete" title="Remove this definition; Undo brings it back" onClick={onDeleteSubckt}>Delete subcircuit</button></div>
               <p className="hint">Ports: {subcktPorts(sch).length ? <span className="mono">{subcktPorts(sch).join(', ')}</span> : 'none yet'}. Each <em>Subcircuit port</em> part becomes a pin, in the order you place them.</p>
               <p className="hint">Mark a part <em>Test bench only</em> to drive this sheet on its own (source, load, ground): Run then simulates just this subcircuit. Use Simulate → Run whole circuit for the full design, and “Top sheet” to go back.</p>
             </fieldset>

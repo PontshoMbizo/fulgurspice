@@ -1,4 +1,5 @@
-// LTspice-style plot: black field, dotted grid. Canvas 2D, redrawn whole on every change.
+// LTspice-style plot on the same light panel as the other dock tabs: dotted grid, dark text,
+// saturated trace colours that read on white. Canvas 2D, redrawn whole on every change.
 //
 //  - one pane with voltages on the left axis and currents (or AC phase) on the right,
 //    or "stacked": one pane per unit, sharing the time axis
@@ -12,7 +13,8 @@ import { formatSI, niceTicks } from '../core/units';
 import { cursorDelta, envelopeIndices, interpAt, toCsv } from '../sim/analysis';
 import type { SimResult } from '../sim/result';
 
-const COLORS = ['#ffe600', '#40c4ff', '#ff6ec7', '#7cfc6a', '#ff9a3c', '#b39dff', '#ffffff', '#ff5252'];
+const COLORS = ['#1565c0', '#d32f2f', '#2e7d32', '#ef6c00', '#6a1b9a', '#00838f', '#ad1457', '#5d4037'];
+const INK = '#222', INK2 = '#555', GRID = '#cfcfcf', FRAME = '#8a8a8a';
 export const traceColor = (i: number) => COLORS[i % COLORS.length];
 
 interface Series { label: string; color: string; axis: 'L' | 'R'; x: Float64Array; y: Float64Array; unit: string; dash: number[]; phase: boolean; pane: number }
@@ -143,7 +145,7 @@ export function WaveformViewer({ result, traces, stacked, onStacked, fileBase }:
     cv.width = Math.round(size.w * dpr); cv.height = Math.round(size.h * dpr);
     const g = cv.getContext('2d')!;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.fillStyle = '#000'; g.fillRect(0, 0, size.w, size.h);
+    g.fillStyle = '#fff'; g.fillRect(0, 0, size.w, size.h);
     geo.current = null;
     if (size.w < 160 || size.h < 80 || !(x1 > x0)) return;
 
@@ -171,15 +173,15 @@ export function WaveformViewer({ result, traces, stacked, onStacked, fileBase }:
 
     panes.forEach((pn, p) => {
       // grid
-      g.strokeStyle = '#6e6e6e'; g.setLineDash([1, 3]);
+      g.strokeStyle = GRID; g.setLineDash([1, 3]);
       g.beginPath();
       for (const t of xticks) { const px = Math.round(X(t)) + 0.5; g.moveTo(px, pn.top); g.lineTo(px, pn.top + pn.h); }
       const ya = pn.left ?? pn.right;
       if (ya) for (const t of ya.ticks) { const py = Math.round(Y(pn, ya, t)) + 0.5; g.moveTo(M.l, py); g.lineTo(M.l + pw, py); }
       g.stroke(); g.setLineDash([]);
-      g.strokeStyle = '#9a9a9a'; g.strokeRect(M.l + 0.5, pn.top + 0.5, pw, pn.h);
+      g.strokeStyle = FRAME; g.strokeRect(M.l + 0.5, pn.top + 0.5, pw, pn.h);
       // y labels
-      g.fillStyle = '#d4d4d4'; g.textBaseline = 'middle';
+      g.fillStyle = INK2; g.textBaseline = 'middle';
       g.textAlign = 'right';
       if (pn.left) for (const t of pn.left.ticks) g.fillText(formatSI(t, pn.left.unit, 3), M.l - 6, Y(pn, pn.left, t));
       g.textAlign = 'left';
@@ -204,12 +206,12 @@ export function WaveformViewer({ result, traces, stacked, onStacked, fileBase }:
       g.setLineDash([]);
       if (zoomBox) {
         const lo2 = Math.min(zoomBox[0], zoomBox[1]), hi2 = Math.max(zoomBox[0], zoomBox[1]);
-        g.fillStyle = 'rgba(255,255,255,0.12)'; g.fillRect(lo2, pn.top, hi2 - lo2, pn.h);
+        g.fillStyle = 'rgba(10,100,200,0.14)'; g.fillRect(lo2, pn.top, hi2 - lo2, pn.h);
       }
       g.restore();
     });
 
-    g.fillStyle = '#d4d4d4'; g.textBaseline = 'top'; g.textAlign = 'center';
+    g.fillStyle = INK2; g.textBaseline = 'top'; g.textAlign = 'center';
     for (const t of xticks) g.fillText(formatSI(t, xUnit, 3), X(t), M.t + ph + 6);
 
     // trace names across the top, as LTspice does
@@ -222,7 +224,7 @@ export function WaveformViewer({ result, traces, stacked, onStacked, fileBase }:
     const box = (rows: { text: string; color: string }[], bx: number, by: number) => {
       const bw = Math.max(...rows.map((r) => g.measureText(r.text).width)) + 16, bh = rows.length * 15 + 8;
       const px = Math.min(Math.max(M.l + 4, bx), M.l + pw - bw - 4);
-      g.fillStyle = 'rgba(20,20,20,0.92)'; g.fillRect(px, by, bw, bh); g.strokeStyle = '#8a8a8a'; g.strokeRect(px + 0.5, by + 0.5, bw, bh);
+      g.fillStyle = 'rgba(255,255,255,0.96)'; g.fillRect(px, by, bw, bh); g.strokeStyle = FRAME; g.strokeRect(px + 0.5, by + 0.5, bw, bh);
       g.textAlign = 'left'; g.textBaseline = 'top';
       rows.forEach((r, n) => { g.fillStyle = r.color; g.fillText(r.text, px + 8, by + 6 + n * 15); });
     };
@@ -234,23 +236,23 @@ export function WaveformViewer({ result, traces, stacked, onStacked, fileBase }:
     };
 
     if (cursors.length) {
-      cursors.forEach((c, i) => vline(c, i === 0 ? '#ffd24a' : '#6fe0ff', [], i === 0 ? 'A' : 'B'));
+      cursors.forEach((c, i) => vline(c, i === 0 ? '#b26a00' : '#0077b6', [], i === 0 ? 'A' : 'B'));
       const xs = `${xLabel} =`;
       const rows: { text: string; color: string }[] = [];
       if (cursors.length === 2) {
         const d = cursorDelta(series, cursors[0], cursors[1]);
-        rows.push({ text: `A ${xs} ${formatSI(cursors[0], xUnit)}   B ${xs} ${formatSI(cursors[1], xUnit)}`, color: '#d4d4d4' });
-        rows.push({ text: `Δ${xLabel} = ${formatSI(d.dx, xUnit)}${!log && d.inverse !== null && xUnit === 's' ? `   1/Δ${xLabel} = ${formatSI(d.inverse, 'Hz')}` : ''}`, color: '#d4d4d4' });
+        rows.push({ text: `A ${xs} ${formatSI(cursors[0], xUnit)}   B ${xs} ${formatSI(cursors[1], xUnit)}`, color: INK });
+        rows.push({ text: `Δ${xLabel} = ${formatSI(d.dx, xUnit)}${!log && d.inverse !== null && xUnit === 's' ? `   1/Δ${xLabel} = ${formatSI(d.inverse, 'Hz')}` : ''}`, color: INK });
         series.forEach((s, i) => rows.push({ text: `${s.label}   A ${formatSI(d.rows[i].a, s.unit)}   B ${formatSI(d.rows[i].b, s.unit)}   Δ ${formatSI(d.rows[i].delta, s.unit)}`, color: s.color }));
       } else {
-        rows.push({ text: `A ${xs} ${formatSI(cursors[0], xUnit)}   (click again for B)`, color: '#d4d4d4' });
+        rows.push({ text: `A ${xs} ${formatSI(cursors[0], xUnit)}   (click again for B)`, color: INK });
         series.forEach((s) => rows.push({ text: `${s.label} = ${formatSI(interpAt(s.x, s.y, cursors[0]), s.unit)}`, color: s.color }));
       }
       box(rows, M.l + pw, M.t + 8);
     } else if (hover !== null && !zoomBox) {
       const xv = fromPx(hover);
-      vline(xv, '#b0b0b0', [4, 3]);
-      const rows = [{ text: `${xLabel} = ${formatSI(xv, xUnit)}`, color: '#d4d4d4' }, ...series.map((s) => ({ text: `${s.label} = ${formatSI(interpAt(s.x, s.y, xv), s.unit)}`, color: s.color }))];
+      vline(xv, '#777', [4, 3]);
+      const rows = [{ text: `${xLabel} = ${formatSI(xv, xUnit)}`, color: INK }, ...series.map((s) => ({ text: `${s.label} = ${formatSI(interpAt(s.x, s.y, xv), s.unit)}`, color: s.color }))];
       const bw = Math.max(...rows.map((r) => g.measureText(r.text).width)) + 16;
       const px = M.l + (hover - M.l);
       box(rows, px + 10 + bw > M.l + pw ? px - 10 - bw : px + 10, M.t + 8);
