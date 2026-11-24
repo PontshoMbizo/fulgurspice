@@ -7,6 +7,7 @@
 
 import type { Analysis, Part, Point, Schematic, Wire } from './types';
 import { pointKey } from './geometry';
+import { topologyFindings, type Device } from './rules';
 import { MODELS, SYMBOLS, pinPositions } from './symbols';
 import { parseSI, toSpice } from './units';
 
@@ -136,12 +137,24 @@ export function compile(sch: Schematic): Compiled {
 
   const devicePinsOnNode = new Map<string, number>();
   for (const { part, k } of pins) if (SYMBOLS[part.kind].card) devicePinsOnNode.set(nodeAt(k), (devicePinsOnNode.get(nodeAt(k)) ?? 0) + 1);
+  let dangling = false;
   for (const { part, pin, k } of pins) {
     if (!SYMBOLS[part.kind].card) continue;
     const node = nodeAt(k);
     if (node !== '0' && devicePinsOnNode.get(node) === 1) {
+      dangling = true;
       issues.push({ level: 'error', message: `${part.ref} pin ${pin.name} is not connected to anything`, partId: part.id, at: { x: pin.x, y: pin.y } });
     }
+  }
+
+  // Loops and cut-sets only make sense on a fully connected circuit with a ground;
+  // otherwise they would just repeat the dangling-pin errors in other words.
+  if (!dangling && taken.has('0')) {
+    const topo: Device[] = devices.map((p) => ({
+      partId: p.id, ref: p.ref, kind: p.kind,
+      nodes: Object.fromEntries(SYMBOLS[p.kind].pins.map((pin) => [pin.name, pinNode.get(`${p.id}:${pin.name}`)!])),
+    }));
+    issues.push(...topologyFindings(topo));
   }
 
   if (sch.analysis.kind === 'ac' && !devices.some((p) => (p.kind === 'V' || p.kind === 'I') && /\bac\b/i.test(p.value))) {

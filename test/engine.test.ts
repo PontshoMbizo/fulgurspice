@@ -110,4 +110,34 @@ ${Object.values(MODELS).join('\n')}
     expect(good.ok).toBe(true);
     expect(good.messages).toEqual([]);
   });
+
+  // The rule checks in src/core/rules.ts call some topologies errors and one a warning.
+  // Measured against the real solver, so the messages say what actually happens.
+  it('voltage-source / inductor loops: ngspice cannot solve them', async () => {
+    const bad: Record<string, string> = {
+      'parallel voltage sources': 'V1 a 0 5\nV2 a 0 3\nR1 a 0 1k\n',
+      'voltage source across an inductor': 'V1 a 0 5\nL1 a 0 1m\n',
+    };
+    for (const [name, body] of Object.entries(bad)) {
+      const r = await runNetlist(`* ${name}\n${body}.op\n.end\n`, 'op');
+      const broke = !r.ok || r.messages.length > 0 || r.vectors.some((v) => !Number.isFinite(v.re[0]));
+      expect(broke, `${name}: ${r.ok ? 'solved cleanly' : r.messages.join(' ')}`).toBe(true);
+    }
+  });
+  it('current-source cut-sets: ngspice either says nothing and returns nonsense, or warns and returns ~1e8 V', async () => {
+    // I1 pushes 1 mA into n and I2 pulls 2 mA out: impossible, yet ngspice reports a calm -1 mV.
+    const series = await runNetlist('* series\nI1 0 n 1m\nI2 n 0 2m\nR1 x 0 1k\nV1 x 0 1\n.op\n.end\n', 'op');
+    expect(series.ok).toBe(true);
+    expect(series.messages).toEqual([]);
+    expect(Math.abs(vec(series, 'v(n)').re[0])).toBeLessThan(1);
+    // A resistor island fed by a current source and tied to nothing else.
+    const island = await runNetlist('* island\nI1 0 a 1m\nR1 a b 1k\nR2 b a 1k\n.op\n.end\n', 'op');
+    expect(island.messages.join(' ')).toMatch(/singular matrix/i);
+    expect(Math.abs(vec(island, 'v(a)').re[0])).toBeGreaterThan(1e6);
+  });
+  it('ngspice carries on, with a plausible answer, past a net with no DC path (so that is only a warning)', async () => {
+    const r = await runNetlist('* floating via cap\nV1 in 0 5\nC1 in x 1u\nR1 x y 1k\nC2 y 0 1u\n.op\n.end\n', 'op');
+    expect(r.ok).toBe(true);
+    expect(Math.abs(vec(r, 'v(x)').re[0])).toBeLessThan(10);
+  });
 });

@@ -4,6 +4,7 @@ import { compile } from '../src/core/netlist';
 import { EXAMPLES } from '../src/core/examples';
 import { emptySchematic, type Part, type Schematic } from '../src/core/types';
 import { pinPositions, toWorld } from '../src/core/symbols';
+import { topologyFindings, type Device } from '../src/core/rules';
 import { vectorLabel } from '../src/sim/result';
 import { copyItems, moveItems, normalizeWires, parseSchematic, pasteItems, removeWireSpan } from '../src/ui/store';
 import { withLabelOffset } from '../src/ui/SchematicCanvas';
@@ -86,6 +87,51 @@ describe('netlister', () => {
     const pins = Object.fromEntries(pinPositions(q).map((p) => [p.name, p]));
     const c = compile(sch([q, P('LABEL', '', pins.E.x, pins.E.y, 'e'), P('LABEL', '', pins.B.x, pins.B.y, 'b'), P('LABEL', '', pins.C.x, pins.C.y, 'c')], []));
     expect(c.netlist).toContain('Q1 c b e PNP_GEN');
+  });
+});
+
+describe('topology rules', () => {
+  const V = (ref: string, p: string, m: string): Device => ({ partId: ref, ref, kind: 'V', nodes: { '+': p, '-': m } });
+  const I = (ref: string, p: string, m: string): Device => ({ partId: ref, ref, kind: 'I', nodes: { '+': p, '-': m } });
+  const R = (ref: string, a: string, b: string): Device => ({ partId: ref, ref, kind: 'R', nodes: { '1': a, '2': b } });
+  const C = (ref: string, a: string, b: string): Device => ({ partId: ref, ref, kind: 'C', nodes: { '1': a, '2': b } });
+  const L = (ref: string, a: string, b: string): Device => ({ partId: ref, ref, kind: 'L', nodes: { '1': a, '2': b } });
+  const msgs = (d: Device[], level?: string) => topologyFindings(d).filter((f) => !level || f.level === level).map((f) => f.message);
+
+  it('accepts ordinary circuits', () => {
+    expect(topologyFindings([V('V1', 'in', '0'), R('R1', 'in', 'out'), R('R2', 'out', '0'), C('C1', 'out', '0')])).toEqual([]);
+    expect(topologyFindings([V('V1', 'a', '0'), V('V2', 'b', 'a'), R('R1', 'b', '0')])).toEqual([]); // series sources are fine
+    expect(topologyFindings([I('I1', 'n', '0'), R('R1', 'n', '0')])).toEqual([]);
+  });
+  it('flags parallel voltage sources, a source across an inductor, and a shorted source', () => {
+    expect(msgs([V('V1', 'a', '0'), V('V2', 'a', '0'), R('R1', 'a', '0')], 'error')[0]).toMatch(/V2 closes a loop/);
+    expect(msgs([V('V1', 'a', '0'), L('L1', 'a', '0')], 'error')[0]).toMatch(/L1 closes a loop/);
+    expect(msgs([V('V1', 'a', 'a'), R('R1', 'a', '0')], 'error')[0]).toMatch(/V1 is shorted/);
+    // three-element loop, not just a pair
+    expect(msgs([V('V1', 'a', '0'), V('V2', 'b', 'a'), L('L1', 'b', '0')], 'error')[0]).toMatch(/L1 closes a loop/);
+  });
+  it('flags current sources that feed a part with no other way back', () => {
+    const series = msgs([I('I1', 'n', '0'), I('I2', '0', 'n'), R('R1', 'x', '0'), V('V1', 'x', '0')], 'error');
+    expect(series).toHaveLength(1);
+    expect(series[0]).toMatch(/I1, I2 push current/);
+    const island = msgs([I('I1', '0', 'a'), R('R1', 'a', 'b'), R('R2', 'b', 'a')], 'error');
+    expect(island[0]).toMatch(/I1 pushes current/);
+  });
+  it('warns, but does not error, when a net has no DC path to ground', () => {
+    const f = topologyFindings([V('V1', 'in', '0'), C('C1', 'in', 'x'), R('R1', 'y', '0'), I('I1', 'y', 'x'), C('C2', 'x', 'y')]);
+    expect(f.filter((x) => x.level === 'error')).toEqual([]);
+    expect(f.map((x) => x.message).join(' ')).toMatch(/Net x has no DC path to ground \(only capacitors, current sources touch it\)/);
+    const gate: Device = { partId: 'M1', ref: 'M1', kind: 'NMOS', nodes: { D: 'd', G: 'g', S: '0' } };
+    const g = topologyFindings([V('V1', 'in', '0'), C('C1', 'in', 'g'), R('R1', 'd', 'in'), gate]);
+    expect(g.map((x) => x.message).join(' ')).toMatch(/Net g has no DC path.*capacitors, MOSFET gates/);
+  });
+  it('is wired into compile, and stays quiet while pins are still dangling', () => {
+    const two = sch([P('V', 'V1', 0, 0, '5'), P('V', 'V2', 4, 0, '3'), P('GND', '', 0, 2, ''), P('R', 'R1', 8, 0, '1k')], [[0, -2, 4, -2], [0, 2, 4, 2], [4, -2, 8, -2], [4, 2, 8, 2]]);
+    const out = compile(two);
+    expect(out.ok).toBe(false);
+    expect(out.issues.map((i) => i.message).join(' | ')).toMatch(/V2 closes a loop/);
+    const dangling = compile(sch([P('V', 'V1', 0, 0, '5'), P('V', 'V2', 4, 0, '3'), P('GND', '', 0, 2, '')], [[0, 2, 4, 2]]));
+    expect(dangling.issues.map((i) => i.message).join(' | ')).not.toMatch(/closes a loop/);
   });
 });
 

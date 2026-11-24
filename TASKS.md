@@ -19,8 +19,8 @@
 ## Phase 2 — netlister
 - [x] **DONE** Union-find connectivity, net labels, ground, deterministic node names
 - [x] **DONE** Rule checks: no ground, unconnected pin, duplicate reference, bad value, AC without a source
-- [ ] Rule check: loop of voltage sources / inductors, and cut-set of current sources / capacitors
-- [ ] Rule check: node with no DC path to ground (today only reported after ngspice warns)
+- [x] **DONE** Rule check: loop of voltage sources / inductors (error), cut-set of current sources (error) — `src/core/rules.ts`
+- [x] **DONE** Rule check: node with no DC path to ground (warning: ngspice adds gmin and carries on)
 - [ ] Subcircuits / hierarchical sheets
 
 ## Phase 3 — analyses and waveform viewer
