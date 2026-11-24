@@ -18,6 +18,8 @@ import { makeSubckt } from '../core/extract';
 import { renameSubckt, subcktPorts } from '../core/subckt';
 import { SUBCKT_NAME } from '../core/symbols';
 import { WaveformViewer, traceColor } from './WaveformViewer';
+import { evaluate, measurementsOf, mergeSweep, withDerived } from '../sim/analysis';
+import { parseSweep } from '../core/params';
 
 const ANALYSIS_NAME = { tran: 'Transient', ac: 'AC sweep', dc: 'DC sweep', op: 'Operating point' } as const;
 const ENGINE_NAME: Record<EngineState, string> = { idle: 'ngspice: not loaded', loading: 'ngspice: loading…', ready: 'ngspice: ready', running: 'ngspice: running…' };
@@ -53,6 +55,7 @@ export function App() {
   // A subcircuit sheet with test-bench parts can be run on its own; `resultOf` says which sheet a result is for.
   const bench = useMemo(() => (editing !== null && sheet.parts.some((p) => p.bench) ? compile(sch, { sheet: editing, standalone: true }) : null), [sch, editing, sheet]);
   const [resultOf, setResultOf] = useState<string | null>(null);
+  const sweep = useMemo(() => parseSweep(sch.sweep).sweep, [sch.sweep]);
   const [selected, setSelected] = useState<string[]>([]);
   const selection = useMemo(() => new Set(selected), [selected]);
   const [tool, setTool] = useState<Tool>('select');
@@ -62,7 +65,11 @@ export function App() {
   const [engine, setEngine] = useState<EngineState>('idle');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<{ text: string; error?: boolean }>({ text: 'Ready' });
-  const [tab, setTab] = useState<'wave' | 'netlist' | 'log'>('wave');
+  const [tab, setTab] = useState<'wave' | 'meas' | 'netlist' | 'log'>('wave');
+  const [stacked, setStacked] = useState(false);
+  // Trace-math expressions the user has typed; they become traces named after themselves.
+  const [exprs, setExprs] = useState<string[]>([]);
+  const [exprText, setExprText] = useState('');
   const [dockH, setDockH] = useState(280);
   const [fitToken, setFitToken] = useState(0);
   const [cursor, setCursor] = useState<Point | null>(null);
@@ -83,7 +90,7 @@ export function App() {
 
   const load = (next: Schematic, note: string) => {
     dispatch({ type: 'load', sch: next });
-    setEdit(null); setSelected([]); setResult(null); setResultOf(null); setTraces([]); setTool('select'); setPlacing(null);
+    setEdit(null); setSelected([]); setResult(null); setResultOf(null); setTraces([]); setExprs([]); setTool('select'); setPlacing(null);
     setFitToken((t) => t + 1);
     say(note);
   };
@@ -97,16 +104,31 @@ export function App() {
     setBusy(true);
     say(client.state === 'ready' ? 'Simulating…' : 'Loading ngspice (about 20 MB, first run only)…');
     try {
-      const r = await client.run(target.netlist, sch.analysis.kind);
+      let r: SimResult;
+      if (sweep && sch.analysis.kind !== 'op') {
+        // ngspice has no .step: run once per value and merge the runs into one plot
+        const runs: SimResult[] = [];
+        let failed: SimResult | null = null;
+        for (const [i, v] of sweep.values.entries()) {
+          say(`Sweep ${i + 1} of ${sweep.values.length}: ${sweep.param} = ${v.tag}…`);
+          const c = alone ? compile(sch, { sheet: editing!, standalone: true, sweepValue: v.value }) : compile(sch, { sweepValue: v.value });
+          const one = await client.run(c.netlist, sch.analysis.kind);
+          if (!one.ok) { failed = { ...one, messages: one.messages.map((m) => `${sweep.param} = ${v.tag}: ${m}`) }; break; }
+          runs.push(one);
+        }
+        r = failed ?? mergeSweep(sweep.param, sweep.values.map((v) => v.tag), runs);
+      } else r = await client.run(target.netlist, sch.analysis.kind);
       setResult(r); setResultOf(alone ? editing : null); setTab('wave'); setWaveOpen(true);
       if (!r.ok) { say(explain(r.messages[0]) ?? r.messages[0], true); return; }
+      const goodExprs = exprs.filter((e) => evaluate(e, r).ok);
+      setExprs(goodExprs);
       setTraces((old) => {
-        const keep = old.filter((name) => r.vectors.some((v) => v.name === name));
+        const keep = old.filter((name) => r.vectors.some((v) => v.name === name) || goodExprs.includes(name));
         if (keep.length) return keep;
         const labelled = [...new Set((alone ? sheet : sch).parts.filter((p) => p.kind === 'LABEL' || p.kind === 'PORT').map((p) => `v(${netName(p.value)})`))].filter((name) => r.vectors.some((v) => v.name === name));
         return (labelled.length ? labelled : r.vectors.filter((v) => v.unit === 'V').map((v) => v.name)).slice(0, 4);
       });
-      const summary = `${alone ? `${editing} on its own — ` : ''}${ANALYSIS_NAME[r.kind]}: ${r.points.toLocaleString()} point${r.points === 1 ? '' : 's'} in ${r.ms < 10 ? r.ms.toFixed(1) : Math.round(r.ms)} ms`;
+      const summary = `${alone ? `${editing} on its own — ` : ''}${r.sweep ? `${r.sweep.runs.length} runs of ` : ''}${ANALYSIS_NAME[r.kind]}: ${r.points.toLocaleString()} point${r.points === 1 ? '' : 's'} in ${r.ms < 10 ? r.ms.toFixed(1) : Math.round(r.ms)} ms`;
       // ngspice often limps through a broken circuit; do not let a plot hide that.
       if (r.messages.length) say(`${summary}, with warnings. ${explain(r.messages[0]) ?? r.messages[0]}`, true);
       else say(summary);
@@ -115,7 +137,7 @@ export function App() {
     } finally {
       setBusy(false);
     }
-  }, [busy, client, compiled, sch, sheet, bench, editing]);
+  }, [busy, client, compiled, sch, sheet, bench, editing, exprs, sweep]);
 
   const stop = () => client.cancel();
   const showWave = () => { setWaveOpen(true); setTab('wave'); };
@@ -295,7 +317,19 @@ export function App() {
     window.addEventListener('pointerup', up);
   };
 
-  const available = result?.ok && result.kind !== 'op' ? result.vectors.filter((v) => !traces.includes(v.name)) : [];
+  // The result plus the user's trace math, as extra traces. Everything the dock shows reads from this.
+  const shown = useMemo(() => (result?.ok && result.kind !== 'op' ? withDerived(result, exprs).result : result), [result, exprs]);
+  const measurements = useMemo(() => (result ? measurementsOf(result) : []), [result]);
+  const available = shown?.ok && shown.kind !== 'op' ? shown.vectors.filter((v) => !traces.includes(v.name)) : [];
+  const addExpr = () => {
+    const text = exprText.trim();
+    if (!text || !result?.ok || result.kind === 'op') return;
+    const r = evaluate(text, result);
+    if (!r.ok) { say(r.error, true); return; }
+    setExprs((old) => (old.includes(text) ? old : [...old, text]));
+    setTraces((old) => (old.includes(text) ? old : [...old, text]));
+    setExprText(''); say(`Added trace ${text}`);
+  };
 
   return (
     <div className="fulgur">
@@ -394,20 +428,20 @@ export function App() {
         <div className="dock-grip" onPointerDown={dragDock} />
         <div className="dock-titlerow">
           <div className="dock-tabs" role="tablist">
-            {(['wave', 'netlist', 'log'] as const).filter((t) => t !== 'wave' || waveOpen).map((t) => (
+            {(['wave', 'meas', 'netlist', 'log'] as const).filter((t) => (t !== 'wave' || waveOpen) && (t !== 'meas' || measurements.length > 0)).map((t) => (
               <span key={t} className={`dock-tab${tab === t ? ' is-active' : ''}`}>
                 <button type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
-                  {t === 'wave' ? 'Waveform' : t === 'netlist' ? 'Netlist' : 'ngspice log'}
+                  {t === 'wave' ? 'Waveform' : t === 'meas' ? `Measurements (${measurements.length})` : t === 'netlist' ? 'Netlist' : 'ngspice log'}
                 </button>
                 {t === 'wave' && <button type="button" className="dock-tab-close" aria-label="Close waveform tab" title="Close waveform tab" onClick={closeWave}>×</button>}
               </span>
             ))}
           </div>
-          {tab === 'wave' && result?.ok && result.kind !== 'op' && (
+          {tab === 'wave' && shown?.ok && shown.kind !== 'op' && (
             <>
               {traces.map((name, i) => (
                 <span key={name} className="trace-chip" style={{ color: traceColor(i) }}>
-                  {result.vectors.find((v) => v.name === name)?.label ?? name}
+                  {shown.vectors.find((v) => v.name === name)?.label ?? name}
                   <button type="button" aria-label={`Remove ${name}`} onClick={() => toggleTrace(name)}>×</button>
                 </span>
               ))}
@@ -415,12 +449,35 @@ export function App() {
                 <option value="">Add trace…</option>
                 {available.map((v) => <option key={v.name} value={v.name}>{v.label}</option>)}
               </select>
-              <span className="dock-note">drag to zoom · double-click to reset</span>
+              <input
+                className="expr-input" aria-label="Trace math" value={exprText} spellCheck={false}
+                placeholder="Trace math: V(out)/V(in)"
+                onChange={(e) => setExprText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addExpr(); } }}
+              />
+              <span className="dock-note">drag: zoom · wheel: y zoom · click: cursors A, B · dbl-click: reset</span>
             </>
           )}
         </div>
         <div className="dock-body">
           {tab === 'netlist' && <pre className="dock-text">{(bench ?? compiled).netlist}</pre>}
+          {tab === 'meas' && (
+            <div className="dock-pane">
+              <table className="op-table">
+                <thead><tr><th>Measurement</th><th>Value</th><th>Detail</th></tr></thead>
+                <tbody>
+                  {measurements.map((m) => (
+                    <tr key={m.name}>
+                      <td className="mono">{m.name}</td>
+                      <td className={`num${m.value === null ? ' is-error' : ''}`}>{m.value === null ? 'failed' : String(Number(m.value.toPrecision(6)))}</td>
+                      <td className="mono muted">{m.value === null && explain(`Error: measure ${m.name}`) ? 'the event it looks for never happens, or the syntax is wrong' : m.note}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="muted">Add measurements under SPICE directives, e.g. <span className="mono">.meas tran vmax MAX v(out)</span>. ngspice evaluates them.</p>
+            </div>
+          )}
           {tab === 'log' && <pre className="dock-text">{result?.log.trim() || 'No run yet.'}</pre>}
           {tab === 'wave' && (!result ? (
             <div className="plot"><div className="plot-empty">Press Run (F5) to simulate.</div></div>
@@ -437,7 +494,7 @@ export function App() {
               </table>
             </div>
           ) : (
-            <WaveformViewer result={result} traces={traces} />
+            <WaveformViewer result={shown!} traces={traces} stacked={stacked} onStacked={setStacked} fileBase={sch.title} />
           ))}
         </div>
       </div>

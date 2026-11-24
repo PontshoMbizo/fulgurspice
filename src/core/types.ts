@@ -71,6 +71,16 @@ export interface Schematic {
   directives: string;
   /** Subcircuit definitions that instances (kind SUBCKT) refer to by name. */
   subckts: Subckt[];
+  /** Repeat the analysis once per value of a parameter used as {name} in the schematic. ngspice has no
+   * .step, so the app runs the netlist several times. */
+  sweep?: SweepSpec;
+}
+
+export interface SweepSpec {
+  /** Parameter name, as written in {name}. */
+  param: string;
+  /** A list ("1k 2k 5k"), "lin start stop count", or "dec start stop pointsPerDecade". */
+  values: string;
 }
 
 export interface Point { x: number; y: number }

@@ -13,6 +13,8 @@ export interface Vector {
   re: Float64Array;
   /** Present for AC analysis only. */
   im?: Float64Array;
+  /** Its own sweep values, when they differ from the result's (one run of a parameter sweep). */
+  x?: Float64Array;
 }
 
 export interface SimResult {
@@ -26,6 +28,8 @@ export interface SimResult {
   messages: string[];
   log: string;
   ms: number;
+  /** A parameter sweep: one full result per value. The fields above are those of the first run. */
+  sweep?: { param: string; tags: string[]; runs: SimResult[] };
 }
 
 export function vectorLabel(name: string): string {

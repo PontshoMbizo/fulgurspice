@@ -206,9 +206,15 @@ export function evaluate(expr: string, result: SimResult): MathResult {
   }
 }
 
-/** The result with each valid expression added as a trace named after it. Bad ones are reported, not added. */
+/** The result with each valid expression added as a trace named after it. Bad ones are reported, not added.
+ * For a sweep, the expression is evaluated in every run. */
 export function withDerived(result: SimResult, exprs: string[]): { result: SimResult; errors: Record<string, string> } {
   if (!result.ok || !result.x || !exprs.length) return { result, errors: {} };
+  if (result.sweep) {
+    const parts = result.sweep.runs.map((r) => withDerived({ ...r, sweep: undefined }, exprs));
+    const first = parts[0].result;
+    return { result: { ...first, sweep: { ...result.sweep, runs: parts.map((p) => p.result) } }, errors: parts[0].errors };
+  }
   const errors: Record<string, string> = {};
   const extra: Vector[] = [];
   for (const e of exprs) {
@@ -217,6 +223,19 @@ export function withDerived(result: SimResult, exprs: string[]): { result: SimRe
     if (r.ok) extra.push(r.vector); else errors[e] = r.error;
   }
   return { result: extra.length ? { ...result, vectors: [...result.vectors, ...extra] } : result, errors };
+}
+
+/** Combine the runs of a parameter sweep into one result. Top-level fields are the first run's,
+ * so everything that does not know about sweeps keeps working on it. */
+export function mergeSweep(param: string, tags: string[], runs: SimResult[]): SimResult {
+  const first = runs[0];
+  return {
+    ...first,
+    messages: [...new Set(runs.flatMap((r) => r.messages))],
+    log: runs.map((r, i) => `* ${param} = ${tags[i]}\n${r.log}`).join('\n'),
+    ms: runs.reduce((t, r) => t + r.ms, 0),
+    sweep: { param, tags, runs },
+  };
 }
 
 // ---------------------------------------------------------------- CSV
@@ -228,6 +247,12 @@ const csvCell = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` 
  * parts; the unit sits in the header so a spreadsheet keeps it. */
 export function toCsv(result: SimResult, names: string[]): string {
   if (!result.ok || !result.x) return '';
+  if (result.sweep) {
+    // long form: one row per point per run, led by the sweep value (the runs have their own time points)
+    const { param, tags, runs } = result.sweep;
+    const parts = runs.map((r) => toCsv({ ...r, sweep: undefined }, names).trimEnd().split('\n'));
+    return [`${csvCell(param)},${parts[0][0]}`, ...parts.flatMap((rows, i) => rows.slice(1).map((row) => `${csvCell(tags[i])},${row}`))].join('\n') + '\n';
+  }
   const picked = names.map((n) => result.vectors.find((v) => v.name === n)).filter((v): v is Vector => !!v);
   const head = [`${result.x.label} [${result.x.unit}]`];
   for (const v of picked) {
@@ -269,4 +294,12 @@ export function parseMeasurements(log: string): Measurement[] {
     out.push({ name: m[1], value: Number.isFinite(value) ? value : null, note: m[3].trim() });
   }
   return out;
+}
+
+/** Measurements from every run of a result, named with the sweep value when there is a sweep. */
+export function measurementsOf(result: SimResult): Measurement[] {
+  if (!result.ok) return [];
+  if (!result.sweep) return parseMeasurements(result.log);
+  const { param, tags, runs } = result.sweep;
+  return runs.flatMap((r, i) => parseMeasurements(r.log).map((m) => ({ ...m, name: `${m.name} (${param}=${tags[i]})` })));
 }

@@ -464,6 +464,35 @@ describe('make subcircuit from selection', () => {
   });
 });
 
+describe('sweep in the netlist', () => {
+  const rcSweep = (sweep: Schematic['sweep'], directives = ''): Schematic => {
+    const s = EXAMPLES.find((e) => /RC low-pass — transient/.test(e.name))!.build();
+    return { ...s, parts: s.parts.map((p) => (p.ref === 'R1' ? { ...p, value: '{R}' } : p)), directives, sweep };
+  };
+  it('defines the sweep parameter, so {R} is not "undefined", and emits it after the directives', () => {
+    const c = compile(rcSweep({ param: 'R', values: '1k 2k' }, '.param Z=1'));
+    expect(c.issues).toEqual([]);
+    const lines = c.netlist.split('\n');
+    expect(lines.indexOf('.param R=1000')).toBeGreaterThan(lines.indexOf('.param Z=1'));
+    expect(lines).toContain('R1 out in {R}');
+    expect(compile(rcSweep({ param: 'R', values: '1k 2k' }), { sweepValue: '2200' }).netlist).toContain('.param R=2200');
+  });
+  it('without a sweep, the same {R} is an undefined-name error', () => {
+    expect(compile(rcSweep(undefined)).issues.map((i) => i.message).join('|')).toMatch(/R1: \{R\} uses r, which is not defined/);
+  });
+  it('reports a malformed sweep, and a clash with .param in the directives', () => {
+    expect(compile(rcSweep({ param: 'R', values: '1k abc' })).issues.map((i) => i.message).join('|')).toMatch(/Sweep: "abc" is not a number/);
+    const clash = compile(rcSweep({ param: 'R', values: '1k 2k' }, '.param R=5k'));
+    expect(clash.ok).toBe(true);
+    expect(clash.issues.map((i) => `${i.level}: ${i.message}`)).toContain('warning: R is set both in the SPICE directives and by the sweep: the sweep value is used');
+  });
+  it('survives save and load', () => {
+    const s = rcSweep({ param: 'R', values: 'lin 1k 4k 4' });
+    expect(parseSchematic(JSON.stringify(s)).sweep).toEqual({ param: 'R', values: 'lin 1k 4k 4' });
+    expect(parseSchematic(JSON.stringify(rcSweep(undefined))).sweep).toBeUndefined();
+  });
+});
+
 describe('normalizeWires', () => {
   it('splits a wire where a pin lands mid-span', () => {
     const base = sch([P('R', 'R1', 10, 2)], [[0, 0, 20, 0]]);

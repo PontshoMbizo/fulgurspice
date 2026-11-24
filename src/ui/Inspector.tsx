@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Compiled } from '../core/netlist';
 import { symbolFor } from '../core/symbols';
 import { subcktPorts } from '../core/subckt';
+import { parseSweep } from '../core/params';
 import type { Analysis, Schematic } from '../core/types';
 import { patchParts } from './store';
 
@@ -33,7 +34,7 @@ function Directives({ value, onCommit }: { value: string; onCommit: (v: string) 
   useEffect(() => setText(value), [value]);
   return (
     <label className="param is-wide">
-      <textarea value={text} spellCheck={false} placeholder={'.model MYDIODE D(Is=1n)\n.param R=1k'} onChange={(e) => setText(e.target.value)} onBlur={() => { if (text !== value) onCommit(text); }} />
+      <textarea value={text} spellCheck={false} placeholder={'.model MYDIODE D(Is=1n)\n.param R=1k\n.meas tran vmax MAX v(out)'} onChange={(e) => setText(e.target.value)} onBlur={() => { if (text !== value) onCommit(text); }} />
       <small>Added to the netlist as written.</small>
     </label>
   );
@@ -72,6 +73,11 @@ export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRota
   const def = part ? symbolFor(part) : null;
   const a = sch.analysis;
   const setA = (next: Analysis) => onRoot({ analysis: next });
+  const setSweep = (patch: Partial<NonNullable<Schematic['sweep']>>) => {
+    const next = { param: sch.sweep?.param ?? '', values: sch.sweep?.values ?? '', ...patch };
+    onRoot({ sweep: next.param || next.values ? next : undefined });
+  };
+  const sweepError = parseSweep(sch.sweep).error;
   const setBench = (on: boolean) => onCommit(patchParts(sch, selection, () => ({ bench: on || undefined })));
   const defParams = editing !== null ? (sch.subckts.find((d) => d.name === editing)?.params ?? '') : '';
 
@@ -101,6 +107,11 @@ export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRota
         <Field label="Start" value={a.start} mono onCommit={(v) => setA({ ...a, start: v })} />
         <Field label="Stop" value={a.stop} mono onCommit={(v) => setA({ ...a, stop: v })} />
         <Field label="Step" value={a.step} mono onCommit={(v) => setA({ ...a, step: v })} />
+      </>}
+      {a.kind !== 'op' && <>
+        <Field label="Sweep parameter" value={sch.sweep?.param ?? ''} mono hint="A {name} used in a value, e.g. R. Empty: no sweep" onCommit={(v) => setSweep({ param: v.trim() })} />
+        {(sch.sweep?.param || sch.sweep?.values) && <Field label="Sweep values" value={sch.sweep?.values ?? ''} mono hint="1k 2k 5k   ·   lin 1k 10k 4   ·   dec 100 10k 3" onCommit={(v) => setSweep({ values: v.trim() })} />}
+        {sweepError && <p className="hint is-error">{sweepError}</p>}
       </>}
       {a.kind === 'op' && <p className="muted">DC voltages and currents with capacitors open and inductors shorted. Node voltages are written on the schematic.</p>}
     </fieldset>

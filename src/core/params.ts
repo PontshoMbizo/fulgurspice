@@ -6,7 +6,8 @@
 // (fine in LTspice) makes the engine spin forever. Numbers are rewritten into the
 // form ngspice reads.
 
-import { parseSI, toSpice } from './units';
+import type { SweepSpec } from './types';
+import { formatSI, parseSI, toSpice } from './units';
 
 export interface Param { name: string; value: string }
 
@@ -56,4 +57,47 @@ export function dotParamNames(directives: string): string[] {
     if (m) for (const n of m[1].matchAll(/([A-Za-z_]\w*)\s*=/g)) out.push(n[1].toLowerCase());
   }
   return out;
+}
+
+// ---------------------------------------------------------------- sweeps
+
+export const MAX_SWEEP = 12;
+
+export interface Sweep {
+  param: string;
+  /** `tag` is for people ("2k"), `value` is what goes after `.param NAME=`. */
+  values: { tag: string; value: string }[];
+}
+
+/** Read a sweep setting. `sweep` is null when none is set (not an error). */
+export function parseSweep(spec: SweepSpec | undefined): { sweep: Sweep | null; error: string | null } {
+  const param = (spec?.param ?? '').trim();
+  const text = (spec?.values ?? '').trim();
+  if (!param && !text) return { sweep: null, error: null };
+  const fail = (error: string) => ({ sweep: null, error });
+  if (!NAME.test(param)) return fail(param ? `"${param}" is not a valid parameter name` : 'Name the parameter to sweep');
+  if (!text) return fail('List the values to sweep, e.g. 1k 2k 5k, or lin 1k 10k 4');
+  const tokens = text.split(/[\s,]+/).filter(Boolean);
+  const nums: number[] = [];
+  const kind = tokens[0].toLowerCase();
+  if (kind === 'lin' || kind === 'dec') {
+    const [a, b, n] = tokens.slice(1).map((t) => parseSI(t));
+    if (tokens.length !== 4 || a === null || b === null || n === null || n === undefined) return fail(`Write ${kind} start stop ${kind === 'lin' ? 'count' : 'pointsPerDecade'}, e.g. ${kind === 'lin' ? 'lin 1k 10k 4' : 'dec 100 10k 3'}`);
+    if (!Number.isInteger(n) || n < 1) return fail('The count must be a whole number of at least 1');
+    if (kind === 'lin') {
+      if (n < 2) return fail('lin needs at least 2 points');
+      for (let i = 0; i < n; i++) nums.push(a + ((b - a) * i) / (n - 1));
+    } else {
+      if (!(a > 0) || !(b > a)) return fail('dec needs 0 < start < stop');
+      for (let k = 0; a * 10 ** (k / n) <= b * (1 + 1e-9); k++) nums.push(a * 10 ** (k / n));
+    }
+  } else {
+    for (const t of tokens) {
+      const v = parseSI(t);
+      if (v === null) return fail(`"${t}" is not a number`);
+      nums.push(v);
+    }
+  }
+  if (nums.length > MAX_SWEEP) return fail(`That is ${nums.length} runs; the limit is ${MAX_SWEEP}`);
+  return { sweep: { param, values: nums.map((v) => ({ tag: formatSI(v, '', 4), value: toSpice(v) })) }, error: null };
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { cursorDelta, envelopeIndices, evaluate, interpAt, parseMeasurements, toCsv, withDerived } from '../src/sim/analysis';
+import { cursorDelta, envelopeIndices, evaluate, interpAt, measurementsOf, mergeSweep, parseMeasurements, toCsv, withDerived } from '../src/sim/analysis';
+import { parseSweep } from '../src/core/params';
 import type { SimResult, Vector } from '../src/sim/result';
 
 const vec = (name: string, label: string, unit: Vector['unit'], re: number[], im?: number[]): Vector =>
@@ -154,5 +155,73 @@ ngspice 4 -> binary raw file "out.raw"
   it('finds nothing when there is no measurement block', () => {
     expect(parseMeasurements('Circuit: x\nNo. of Data Rows : 5\n')).toEqual([]);
     expect(parseMeasurements('')).toEqual([]);
+  });
+});
+
+describe('parseSweep', () => {
+  const ok = (param: string, values: string) => { const r = parseSweep({ param, values }); if (!r.sweep) throw new Error(r.error ?? 'no sweep'); return r.sweep; };
+  const bad = (param: string, values: string) => parseSweep({ param, values }).error;
+
+  it('reads a list, with SPICE suffixes, commas or spaces', () => {
+    const s = ok('R', '1k, 2k 4k7');
+    expect(s.param).toBe('R');
+    expect(s.values.map((v) => v.value)).toEqual(['1000', '2000', '4700']);
+    expect(s.values.map((v) => v.tag)).toEqual(['1k', '2k', '4.7k']);
+  });
+  it('generates linear and decade sweeps, endpoints included', () => {
+    expect(ok('R', 'lin 1k 4k 4').values.map((v) => v.value)).toEqual(['1000', '2000', '3000', '4000']);
+    const dec = ok('C', 'dec 100 10k 2').values.map((v) => Number(v.value));
+    expect(dec).toHaveLength(5);
+    expect(dec[0]).toBeCloseTo(100, 6); expect(dec[2]).toBeCloseTo(1000, 6); expect(dec[4]).toBeCloseTo(10000, 4);
+  });
+  it('says nothing when there is no sweep, and explains what is wrong otherwise', () => {
+    expect(parseSweep(undefined)).toEqual({ sweep: null, error: null });
+    expect(parseSweep({ param: '', values: '' })).toEqual({ sweep: null, error: null });
+    expect(bad('', '1k')).toMatch(/Name the parameter/);
+    expect(bad('1R', '1k')).toMatch(/not a valid parameter name/);
+    expect(bad('R', '')).toMatch(/List the values/);
+    expect(bad('R', '1k abc')).toMatch(/"abc" is not a number/);
+    expect(bad('R', 'lin 1k')).toMatch(/Write lin start stop count/);
+    expect(bad('R', 'lin 1k 2k 1')).toMatch(/at least 2/);
+    expect(bad('R', 'dec 0 10 3')).toMatch(/0 < start < stop/);
+    expect(bad('R', 'lin 1 100 50')).toMatch(/50 runs; the limit is 12/);
+  });
+});
+
+describe('sweep results', () => {
+  const run = (scale: number, x: number[]): SimResult => ({
+    ...result([vec('v(out)', 'V(out)', 'V', x.map((t) => scale * t)), vec('i(v1)', 'I(V1)', 'A', x.map(() => 0.001 * scale))], x),
+    log: `Measurements for Transient Analysis\n\nvmax = ${scale * 2} at= 1e-3\n\nngspice 2 -> binary raw file "x"\n`,
+  });
+  const runs = [run(1, [0, 1, 2]), run(2, [0, 0.5, 1, 1.5, 2])]; // different time points per run, as ngspice gives
+  const merged = mergeSweep('R', ['1k', '2k'], runs);
+
+  it('keeps the first run as the top level, so code that ignores sweeps still works', () => {
+    expect(merged.vectors).toBe(runs[0].vectors);
+    expect(merged.sweep!.runs).toBe(runs);
+    expect(merged.sweep!.tags).toEqual(['1k', '2k']);
+    expect(merged.log).toContain('* R = 1k');
+    expect(merged.log).toContain('* R = 2k');
+  });
+  it('evaluates trace math in every run', () => {
+    const { result: d, errors } = withDerived(merged, ['V(out)*2']);
+    expect(errors).toEqual({});
+    // run 1 has V(out) = t = [0,1,2]; run 2 has V(out) = 2t = [0,1,2,3,4] on its own time points
+    expect(d.sweep!.runs.map((r) => Array.from(r.vectors.find((v) => v.name === 'V(out)*2')!.re))).toEqual([[0, 2, 4], [0, 2, 4, 6, 8]]);
+    expect(d.vectors.map((v) => v.name)).toContain('V(out)*2'); // the top level is the first run
+    expect(withDerived(merged, ['V(nope)']).errors).toHaveProperty(['V(nope)']);
+  });
+  it('writes a sweep as long-form CSV led by the sweep value', () => {
+    const csv = toCsv(merged, ['v(out)']).trim().split('\n');
+    expect(csv[0]).toBe('R,time [s],V(out) [V]');
+    expect(csv).toHaveLength(1 + 3 + 5);
+    expect(csv[1]).toBe('1k,0,0');
+    expect(csv[4]).toBe('2k,0,0');
+    expect(csv[8]).toBe('2k,2,4');
+  });
+  it('collects measurements from every run and names them by sweep value', () => {
+    expect(measurementsOf(merged).map((m) => [m.name, m.value])).toEqual([['vmax (R=1k)', 2], ['vmax (R=2k)', 4]]);
+    expect(measurementsOf(runs[0]).map((m) => m.name)).toEqual(['vmax']);
+    expect(measurementsOf({ ...runs[0], ok: false })).toEqual([]);
   });
 });

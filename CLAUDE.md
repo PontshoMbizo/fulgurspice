@@ -38,6 +38,10 @@ Simulink-style block simulator backed by Scilab) and deliberately shares its des
   grader would hang. `compile()` refuses undefined `{names}` (`exprNames`) and rewrites parameter
   numbers through `spiceValue`; keep it that way. ngspice also silently ignores unknown instance
   parameters, so those are checked in `compile()` too.
+- **ngspice has no `.step`** (it says "unimplemented dot command"). Sweeps run the netlist once per value with
+  `.param NAME=value` placed last (the last `.param` wins, measured) and merge the runs: `mergeSweep`.
+- `.meas` results come back only in the engine log; a `.meas` that cannot be evaluated is an error *line*
+  but the waveforms are fine, so `normalise()` must not treat it as a failed run.
 - Vector names stay as ngspice reports them (`v(out)`, `i(@r1[i])`); `vectorLabel()` makes the
   display form (`V(out)`, `I(R1)`).
 - Visual language: grey desktop chrome (from fulgurlab), KiCad default colours on the sheet

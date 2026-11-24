@@ -4,7 +4,8 @@ import { Simulation } from 'eecircuit-engine';
 import { compile } from '../src/core/netlist';
 import type { Part, Schematic } from '../src/core/types';
 import { makeSubckt } from '../src/core/extract';
-import { evaluate, parseMeasurements, withDerived } from '../src/sim/analysis';
+import { evaluate, mergeSweep, parseMeasurements, withDerived } from '../src/sim/analysis';
+import { parseSweep } from '../src/core/params';
 import { EXAMPLES } from '../src/core/examples';
 import { MODELS } from '../src/core/symbols';
 import type { Analysis } from '../src/core/types';
@@ -176,6 +177,30 @@ describe('ngspice end to end', () => {
     const peakOut = Math.max(...vec(res, 'v(out)').re);
     expect(vmax).toBeCloseTo(peakOut, 2); // ngspice interpolates, the sample peak is close
     expect(m.find((x) => x.name === 'vpp')!.value!).toBeGreaterThan(1.5);
+  });
+  it('a parameter sweep runs the netlist once per value: R = 1k, 2k, 4k gives -3 dB corners at 1/(2πRC), halving each time', async () => {
+    const base = EXAMPLES.find((e) => /AC sweep/.test(e.name) && /RC low-pass/.test(e.name))!.build();
+    const s: Schematic = { ...base, parts: base.parts.map((p) => (p.ref === 'R1' ? { ...p, value: '{R}' } : p)), sweep: { param: 'R', values: '1k 2k 4k' } };
+    const sw = parseSweep(s.sweep).sweep!;
+    const runs = [];
+    for (const v of sw.values) {
+      const c = compile(s, { sweepValue: v.value });
+      expect(c.ok, c.issues.map((i) => i.message).join('|')).toBe(true);
+      const r = await runNetlist(c.netlist, 'ac');
+      expect(r.ok).toBe(true);
+      runs.push(r);
+    }
+    const merged = mergeSweep(sw.param, sw.values.map((v) => v.tag), runs);
+    expect(merged.sweep!.runs).toHaveLength(3);
+    // |H(f)| = 1/sqrt(1+(2πfRC)²) in each run, at every frequency
+    merged.sweep!.runs.forEach((run, i) => {
+      const R = [1e3, 2e3, 4e3][i];
+      const out = vec(run, 'v(out)');
+      run.x!.re.forEach((f, k) => expect(Math.hypot(out.re[k], out.im![k]), `R=${R} f=${f}`).toBeCloseTo(1 / Math.hypot(1, 2 * Math.PI * f * R * 100e-9), 6));
+    });
+    // and a derived trace works across the runs
+    const { result: d } = withDerived(merged, ['db(V(out)/V(in))']);
+    expect(d.sweep!.runs.every((r) => r.vectors.some((v) => v.name === 'db(V(out)/V(in))'))).toBe(true);
   });
   it('half-wave rectifier: output peaks one diode drop below 5 V and never goes negative', async () => {
     const r = await runExample(/rectifier/);

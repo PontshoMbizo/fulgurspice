@@ -28,12 +28,14 @@
 ## Phase 3 — analyses and waveform viewer
 - [x] **DONE** `.tran`, `.ac`, `.dc`, `.op`; voltage and current probing from the schematic
 - [x] **DONE** Dual axis (V left, A right), Bode magnitude + phase, hover cursor, drag-zoom
-- [ ] Two measurement cursors with delta readout (dt, 1/dt, dV)
-- [ ] Trace math: `V(a)-V(b)`, `V(out)/V(in)`, power `V*I`
-- [ ] `.meas` support and a results panel (also needed for grading)
-- [ ] Stacked plot panes; vertical zoom; export CSV / PNG
-- [ ] Parameter sweeps (`.step`-style) with one trace per value
-- [ ] Decimate very long traces before drawing (min/max per pixel column)
+- [x] **DONE** Two measurement cursors: click for A then B, readout with Δ and 1/Δt per trace (right-click or double-click clears)
+- [x] **DONE** Trace math: `V(a)-V(b)`, `V(out)/V(in)`, `V(in)*I(V1)`, `abs db ph re im sqrt`; complex-aware for AC; units tracked (V·A = W)
+- [x] **DONE** `.meas` support: write `.meas` lines under SPICE directives; a Measurements tab lists the values, failed ones flagged (`measurementsOf`, reused for grading)
+- [x] **DONE** Stacked plot panes (one per unit), vertical zoom (wheel), shift+wheel x zoom, export CSV / PNG (download buttons not exercised in the browser)
+- [x] **DONE** Parameter sweeps: Analysis → Sweep parameter and values (list, `lin`, `dec`; max 12 runs); one run per value, merged into one plot. ngspice has no `.step`, so the app repeats the run
+- [x] **DONE** Decimate very long traces before drawing (min/max per pixel column; single-sample spikes survive)
+
+- [ ] Phase 3 follow-ups: sweeps for operating-point analysis (a table per value); a swept subcircuit-parameter shortcut; vertical pan; cursor snap to data points; measurement helper dialog
 
 ## Phase 4 — models and parts
 - [ ] Real part models (1N4148, 2N3904/3906, 2N7000, LM358, TL072): check each vendor licence first

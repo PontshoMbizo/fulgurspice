@@ -8,7 +8,7 @@
 import type { Analysis, Part, Point, Schematic, Subckt, Wire } from './types';
 import { pointKey } from './geometry';
 import { topologyFindings, type Device } from './rules';
-import { dotParamNames, exprNames, formatParams, parseParams } from './params';
+import { dotParamNames, exprNames, formatParams, parseParams, parseSweep } from './params';
 import { subcktPorts } from './subckt';
 import { MODELS, SUBCKT_NAME, pinPositions, symbolFor } from './symbols';
 import { parseSI, toSpice } from './units';
@@ -81,6 +81,8 @@ export interface CompileOptions {
   sheet?: string;
   /** With `sheet`: build a runnable netlist from that sheet on its own, test bench parts and all. */
   standalone?: boolean;
+  /** The value the sweep parameter takes in this netlist (default: the first of the sweep). */
+  sweepValue?: string;
 }
 
 /** top: the document's main sheet. sub: a definition as emitted (test bench left out).
@@ -289,11 +291,15 @@ export function compile(sch: Schematic, opts: CompileOptions = {}): Compiled {
   const standaloneDef = opts.standalone && opts.sheet !== undefined ? defs.get(opts.sheet.toLowerCase()) : undefined;
   if (opts.standalone && opts.sheet !== undefined && !standaloneDef) return missing(opts.sheet);
   const mainParts = standaloneDef ? standaloneDef.parts : sch.parts;
-  const globals = dotParamNames(sch.directives);
+  const sw = parseSweep(sch.sweep);
+  // The sweep parameter is defined by the sweep itself, so {name} in a value is not "undefined".
+  const globals = [...dotParamNames(sch.directives), ...(sw.sweep ? [sw.sweep.param.toLowerCase()] : [])];
   const ownParams = standaloneDef ? parseParams(standaloneDef.params).items : [];
   const top = analyseSheet(standaloneDef ?? sch, standaloneDef ? 'standalone' : 'top', defs, new Set([...globals, ...ownParams.map((q) => q.name.toLowerCase())]));
   const issues = top.issues;
   if (standaloneDef) issues.push(...paramIssues(standaloneDef));
+  if (sw.error) issues.push({ level: 'error', message: `Sweep: ${sw.error}` });
+  if (sw.sweep && dotParamNames(sch.directives).includes(sw.sweep.param.toLowerCase())) issues.push({ level: 'warning', message: `${sw.sweep.param} is set both in the SPICE directives and by the sweep: the sweep value is used` });
   const models = new Set(top.models);
 
   // Every subcircuit reachable from the main sheet, checked and emitted once.
@@ -326,6 +332,8 @@ export function compile(sch: Schematic, opts: CompileOptions = {}): Compiled {
   const lines = [`* ${title.replace(/\s+/g, ' ').trim() || 'untitled'}`, ...paramLines, ...blocks, ...top.cards, ...models];
   const extra = sch.directives.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !/^\.end$/i.test(l));
   lines.push(...extra);
+  // After the user's own lines: when a parameter is set twice the last one wins (measured).
+  if (sw.sweep) lines.push(`.param ${sw.sweep.param}=${opts.sweepValue ?? sw.sweep.values[0].value}`);
   // Per-device currents (I(R1) and friends). ngspice cannot save them in AC analysis.
   if (sch.analysis.kind !== 'ac') lines.push('.options savecurrents');
   lines.push(analysisLine(sch.analysis, mainParts, issues), '.end');

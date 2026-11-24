@@ -249,7 +249,8 @@ export function parseSchematic(text: string): Schematic {
   const base = emptySchematic();
   const a = d.analysis;
   const analysis = a && ['tran', 'ac', 'dc', 'op'].includes(a.kind) ? a : base.analysis;
-  return syncInstances({ ...base, title: String(d.title ?? base.title), parts, wires, analysis, directives: String(d.directives ?? ''), subckts });
+  const sw = d.sweep && typeof d.sweep.param === 'string' ? { sweep: { param: d.sweep.param, values: String(d.sweep.values ?? '') } } : {};
+  return syncInstances({ ...base, title: String(d.title ?? base.title), parts, wires, analysis, directives: String(d.directives ?? ''), subckts, ...sw });
 }
 
 const KEY = 'fulgurspice:schematic';
