@@ -5,7 +5,11 @@
 export type Rot = 0 | 90 | 180 | 270;
 
 export type PartKind =
-  | 'R' | 'C' | 'L' | 'V' | 'I' | 'GND' | 'D' | 'NPN' | 'PNP' | 'NMOS' | 'PMOS' | 'OPAMP' | 'LABEL';
+  | 'R' | 'C' | 'L' | 'V' | 'I' | 'GND' | 'D' | 'NPN' | 'PNP' | 'NMOS' | 'PMOS' | 'OPAMP' | 'LABEL'
+  /** A subcircuit's connection to the outside: only meaningful inside a subcircuit sheet. */
+  | 'PORT'
+  /** An instance of a user-defined subcircuit; `value` is the subcircuit's name. */
+  | 'SUBCKT';
 
 export interface Part {
   id: string;
@@ -22,6 +26,9 @@ export interface Part {
    * units. Absent = default placement. Set by dragging the text in the editor. */
   refOffset?: Point;
   valueOffset?: Point;
+  /** SUBCKT only: the subcircuit's port names, in pin order, as of the last sync. Pins are
+   * laid out from this list, so geometry needs nothing but the part. */
+  ports?: string[];
 }
 
 export interface Wire {
@@ -38,6 +45,14 @@ export type Analysis =
   | { kind: 'dc'; source: string; start: string; stop: string; step: string }
   | { kind: 'op' };
 
+/** A user-defined subcircuit: a sheet of its own. Its ports are the PORT parts on it,
+ * in the order they appear in `parts`. Compiles to `.subckt NAME ... .ends`. */
+export interface Subckt {
+  name: string;
+  parts: Part[];
+  wires: Wire[];
+}
+
 export interface Schematic {
   format: 'fulgurspice-schematic';
   version: 1;
@@ -47,6 +62,8 @@ export interface Schematic {
   analysis: Analysis;
   /** Extra SPICE lines (.model, .param, .options) appended verbatim. */
   directives: string;
+  /** Subcircuit definitions that instances (kind SUBCKT) refer to by name. */
+  subckts: Subckt[];
 }
 
 export interface Point { x: number; y: number }
@@ -59,4 +76,5 @@ export const emptySchematic = (): Schematic => ({
   wires: [],
   analysis: { kind: 'tran', step: '10u', stop: '10m' },
   directives: '',
+  subckts: [],
 });

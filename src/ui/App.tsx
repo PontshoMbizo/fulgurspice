@@ -12,7 +12,9 @@ import { MenuBar } from './Menus';
 import { Palette } from './Palette';
 import { QuickAdd } from './QuickAdd';
 import { SchematicCanvas, type Placing, type ProbeTarget, type Tool } from './SchematicCanvas';
-import { copyItems, deleteItems, docReducer, loadSaved, parseSchematic, pasteItems, patchParts, removeWireSpan, rotated, saveLocal, type Clipboard, type Doc } from './store';
+import { addSubckt, copyItems, deleteItems, docReducer, loadSaved, parseSchematic, pasteItems, patchParts, removeSubckt, removeWireSpan, rotated, saveLocal, sheetOf, subcktNameProblem, type Clipboard, type Doc } from './store';
+import { NamePrompt } from './NamePrompt';
+import { subcktPorts } from '../core/subckt';
 import { WaveformViewer, traceColor } from './WaveformViewer';
 
 const ANALYSIS_NAME = { tran: 'Transient', ac: 'AC sweep', dc: 'DC sweep', op: 'Operating point' } as const;
@@ -37,6 +39,14 @@ export function App() {
   const [doc, dispatch] = useReducer(docReducer, undefined, initDoc);
   const sch = doc.sch;
   const compiled = useMemo(() => compile(sch), [sch]);
+  // Which subcircuit's sheet is open (null = the top sheet). Falls back to the top
+  // sheet if that subcircuit disappears, e.g. through undo.
+  const [edit, setEdit] = useState<string | null>(null);
+  const editing = edit !== null && sch.subckts.some((s) => s.name === edit) ? edit : null;
+  /** The sheet on screen, as an ordinary schematic: every edit below works on this. */
+  const sheet = useMemo(() => sheetOf(sch, editing), [sch, editing]);
+  const view = useMemo(() => (editing === null ? compiled : compile(sch, { sheet: editing })), [sch, editing, compiled]);
+  const [namingSubckt, setNamingSubckt] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const selection = useMemo(() => new Set(selected), [selected]);
   const [tool, setTool] = useState<Tool>('select');
@@ -61,12 +71,13 @@ export function App() {
   // Fetch the engine shortly after first paint so the first Run does not wait for 20 MB.
   useEffect(() => { const t = setTimeout(() => void client.warm(), 600); return () => clearTimeout(t); }, [client]);
 
-  const commit = useCallback((next: Schematic) => dispatch({ type: 'commit', sch: next }), []);
+  /** `onSheet` is the sheet `next` belongs to: the open one unless told otherwise (null = top sheet). */
+  const commit = useCallback((next: Schematic, onSheet: string | null = editing) => dispatch({ type: 'commit', sch: next, sheet: onSheet }), [editing]);
   const say = (text: string, error = false) => setStatus({ text, error });
 
   const load = (next: Schematic, note: string) => {
     dispatch({ type: 'load', sch: next });
-    setSelected([]); setResult(null); setTraces([]); setTool('select'); setPlacing(null);
+    setEdit(null); setSelected([]); setResult(null); setTraces([]); setTool('select'); setPlacing(null);
     setFitToken((t) => t + 1);
     say(note);
   };
@@ -103,6 +114,7 @@ export function App() {
 
   const toggleTrace = (name: string) => setTraces((t) => (t.includes(name) ? t.filter((x) => x !== name) : [...t, name]));
   const onProbe = (target: ProbeTarget) => {
+    if (editing !== null) { say('Probe on the top sheet: nets inside a subcircuit are local to it.'); return; }
     if (!result?.ok) { say('Run the simulation first, then probe.', true); return; }
     if (result.kind === 'op') { say('An operating point has nothing to plot: read the values in the table below.'); return; }
     if ('node' in target) {
@@ -117,21 +129,45 @@ export function App() {
     toggleTrace(name); showWave();
   };
 
+  const openSubckt = (name: string) => {
+    const def = sch.subckts.find((s) => s.name.toLowerCase() === name.toLowerCase());
+    if (!def) { say(`There is no subcircuit called "${name}". Create it with Place > New subcircuit…`, true); return; }
+    setEdit(def.name); setSelected([]); setTool('select'); setPlacing(null); setFitToken((t) => t + 1);
+    say(`Editing subcircuit ${def.name}`);
+  };
+  const closeSubckt = () => { setEdit(null); setSelected([]); setTool('select'); setPlacing(null); setFitToken((t) => t + 1); say('Back on the top sheet'); };
+  const createSubckt = (name: string) => {
+    commit(addSubckt(sch, name), null);
+    setNamingSubckt(false); setEdit(name); setSelected([]); setTool('select'); setPlacing(null); setFitToken((t) => t + 1);
+    say(`New subcircuit ${name}: draw its inside and add Subcircuit port parts for its pins`);
+  };
+  const pickSubckt = (name: string) => {
+    const def = sch.subckts.find((s) => s.name === name);
+    if (!def) return;
+    if (editing === name) { say(`${name} cannot be placed inside its own sheet`, true); return; }
+    setPlacing({ kind: 'SUBCKT', rot: 0, mirror: false, value: def.name, ports: subcktPorts(def) }); setTool('place'); setSelected([]);
+  };
+  const deleteSubckt = (name: string) => {
+    const uses = [{ parts: sch.parts }, ...sch.subckts].reduce((n, sh) => n + sh.parts.filter((p) => p.kind === 'SUBCKT' && p.value.trim().toLowerCase() === name.toLowerCase()).length, 0);
+    commit(removeSubckt(sch, name), null);
+    say(uses ? `Deleted subcircuit ${name}. ${uses} instance${uses === 1 ? '' : 's'} of it now ${uses === 1 ? 'has' : 'have'} no definition (Undo brings it back)` : `Deleted subcircuit ${name}`, uses > 0);
+  };
+
   const pick = (kind: Part['kind']) => { setPlacing({ kind, rot: 0, mirror: false }); setTool('place'); setSelected([]); };
   const cancelTool = () => { setTool('select'); setPlacing(null); };
   const rotate = () => {
     if (tool === 'place' && placing) setPlacing({ ...placing, rot: rotated(placing.rot) });
-    else if (selected.length) commit(patchParts(sch, selection, (p) => ({ rot: rotated(p.rot) })));
+    else if (selected.length) commit(patchParts(sheet, selection, (p) => ({ rot: rotated(p.rot) })));
   };
   const mirror = () => {
     if (tool === 'place' && placing) setPlacing({ ...placing, mirror: !placing.mirror });
-    else if (selected.length) commit(patchParts(sch, selection, (p) => ({ mirror: !p.mirror })));
+    else if (selected.length) commit(patchParts(sheet, selection, (p) => ({ mirror: !p.mirror })));
   };
-  const del = () => { if (selected.length) { commit(deleteItems(sch, selection)); setSelected([]); } };
+  const del = () => { if (selected.length) { commit(deleteItems(sheet, selection)); setSelected([]); } };
 
   const copy = () => {
     if (!selected.length) return false;
-    clipboard.current = { clip: copyItems(sch, selection), pastes: 0 };
+    clipboard.current = { clip: copyItems(sheet, selection), pastes: 0 };
     say(`Copied ${selected.length} item${selected.length === 1 ? '' : 's'}`);
     return true;
   };
@@ -140,18 +176,18 @@ export function App() {
     const c = clipboard.current;
     if (!c) { say('Nothing to paste: copy something first.'); return; }
     c.pastes += 1;
-    const out = pasteItems(sch, c.clip, 2 * c.pastes, 2 * c.pastes);
+    const out = pasteItems(sheet, c.clip, 2 * c.pastes, 2 * c.pastes);
     commit(out.sch); setSelected(out.ids); setTool('select'); setPlacing(null);
   };
   const duplicate = () => {
     if (!selected.length) return;
-    const out = pasteItems(sch, copyItems(sch, selection), 2, 2);
+    const out = pasteItems(sheet, copyItems(sheet, selection), 2, 2);
     commit(out.sch); setSelected(out.ids);
   };
   const delSegment = () => {
     if (!cursor) return;
-    const next = removeWireSpan(sch, selection, cursor);
-    if (next === sch) { say('Hover over a selected wire to delete just that segment.'); return; }
+    const next = removeWireSpan(sheet, selection, cursor);
+    if (next === sheet) { say('Hover over a selected wire to delete just that segment.'); return; }
     commit(next); setSelected([]);
     say('Deleted wire segment');
   };
@@ -183,7 +219,7 @@ export function App() {
       else if (mod && key === 'v') { e.preventDefault(); paste(); }
       else if (mod && key === 'd') { e.preventDefault(); duplicate(); }
       else if (mod || e.altKey) return;
-      else if (e.key === 'Escape') cancelTool();
+      else if (e.key === 'Escape') { if (editing !== null && tool === 'select' && !selected.length) closeSubckt(); else cancelTool(); }
       else if (key === 'a') { e.preventDefault(); setQuickAdd(true); }
       else if (e.shiftKey && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); delSegment(); }
       else if (key === 'w') { setTool('wire'); setPlacing(null); }
@@ -253,6 +289,10 @@ export function App() {
             { label: 'Wire', shortcut: 'W', run: () => { setTool('wire'); setPlacing(null); } },
             { label: 'Ground', run: () => pick('GND') },
             { label: 'Net label', run: () => pick('LABEL') },
+            { separator: true },
+            { label: 'Subcircuit port', disabled: editing === null, run: () => pick('PORT') },
+            { label: 'New subcircuit…', run: () => setNamingSubckt(true) },
+            { label: 'Top sheet', disabled: editing === null, run: closeSubckt },
           ] },
           { title: 'Simulate', items: [
             { label: 'Run', shortcut: 'F5', disabled: busy, run: () => void run() },
@@ -266,6 +306,12 @@ export function App() {
             { label: 'Show waveform', disabled: waveOpen && tab === 'wave', run: showWave },
           ] },
         ]} />
+        {editing !== null && (
+          <span className="sheet-crumb">
+            <button type="button" className="btn" onClick={closeSubckt} title="Back to the top sheet (Esc)">◂ Top sheet</button>
+            <span> › subcircuit <strong>{editing}</strong></span>
+          </span>
+        )}
         <span className="model-name">{sch.title}</span>
         <input ref={fileInput} type="file" accept=".json,application/json" hidden onChange={(e) => { void open(e.target.files?.[0]); e.target.value = ''; }} />
       </div>
@@ -290,13 +336,16 @@ export function App() {
       </div>
 
       <div className="workspace">
-        <Palette active={tool === 'place' ? placing?.kind ?? null : null} onPick={pick} />
-        <SchematicCanvas
-          sch={sch} compiled={compiled} selection={selection} tool={tool} placing={placing}
-          probeColors={probeColors} opValues={opValues} errorParts={errorParts} fitToken={fitToken}
-          onCommit={commit} onSelect={setSelected} onProbe={onProbe} onCancel={cancelTool} onCursor={setCursor} onZoom={setZoom}
+        <Palette
+          active={tool === 'place' ? placing?.kind ?? null : null} activeSubckt={tool === 'place' && placing?.kind === 'SUBCKT' ? placing.value ?? null : null}
+          subckts={sch.subckts} onPick={pick} onPickSubckt={pickSubckt} onOpenSubckt={openSubckt} onNewSubckt={() => setNamingSubckt(true)} onDeleteSubckt={deleteSubckt}
         />
-        <Inspector sch={sch} compiled={compiled} selection={selection} onCommit={commit} onSelect={setSelected} onRotate={rotate} onMirror={mirror} onDelete={del} />
+        <SchematicCanvas
+          sch={sheet} compiled={view} selection={selection} tool={tool} placing={placing}
+          probeColors={editing === null ? probeColors : new Map()} opValues={editing === null ? opValues : null} errorParts={errorParts} fitToken={fitToken}
+          onCommit={commit} onSelect={setSelected} onProbe={onProbe} onCancel={cancelTool} onCursor={setCursor} onZoom={setZoom} onOpenSubckt={openSubckt}
+        />
+        <Inspector sch={sheet} compiled={view} selection={selection} onCommit={commit} onSelect={setSelected} onRotate={rotate} onMirror={mirror} onDelete={del} editing={editing} onOpenSubckt={openSubckt} />
       </div>
 
       <div className="dock" style={{ height: dockH }}>
@@ -351,13 +400,14 @@ export function App() {
         </div>
       </div>
 
-      {quickAdd && <QuickAdd onClose={() => setQuickAdd(false)} onPick={(kind) => { setQuickAdd(false); pick(kind); }} />}
+      {quickAdd && <QuickAdd subckts={sch.subckts} onClose={() => setQuickAdd(false)} onPick={(kind) => { setQuickAdd(false); pick(kind); }} onPickSubckt={(name) => { setQuickAdd(false); pickSubckt(name); }} />}
+      {namingSubckt && <NamePrompt title="New subcircuit" problem={(n) => subcktNameProblem(sch, n)} onSubmit={createSubckt} onClose={() => setNamingSubckt(false)} />}
 
       <div className="statusbar">
         <span className={`status-main${status.error ? ' is-error' : ''}`} role="status">{status.text}</span>
         <span className="status-cell mono">{cursor ? `x ${cursor.x}  y ${cursor.y}` : 'x –  y –'}</span>
         <span className="status-cell mono">{Math.round(zoom * 50)}%</span>
-        <span className="status-cell">{sch.parts.filter((p) => p.ref).length} parts · {compiled.nodes.length} nets</span>
+        <span className="status-cell">{sheet.parts.filter((p) => p.ref).length} parts · {view.nodes.length} nets</span>
         <span className="status-cell status-engine">{ENGINE_NAME[engine]}</span>
       </div>
     </div>

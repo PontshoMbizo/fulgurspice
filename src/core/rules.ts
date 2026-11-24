@@ -44,6 +44,8 @@ function conductEdges(d: Device): Edge[] {
     case 'D': return [[n['A'], n['K']]];
     case 'NPN': case 'PNP': return [[n['C'], n['E']], [n['B'], n['E']]];
     case 'NMOS': case 'PMOS': return [[n['D'], n['S']]];
+    // Unknown inside: assume it conducts between its pins, so it never causes a false alarm.
+    case 'SUBCKT': { const v = Object.values(n); return v.slice(1).map((x): Edge => [v[0], x]); }
     default: return [];
   }
 }
@@ -70,7 +72,7 @@ class Groups {
 
 const list = (names: string[]) => (names.length <= 3 ? names.join(', ') : `${names.slice(0, 3).join(', ')} and ${names.length - 3} more`);
 
-export function topologyFindings(devices: Device[]): Finding[] {
+export function topologyFindings(devices: Device[], opts: { loopsOnly?: boolean } = {}): Finding[] {
   const out: Finding[] = [];
 
   // 1. A loop made only of voltage sources and inductors: Kirchhoff's voltage law
@@ -83,6 +85,8 @@ export function topologyFindings(devices: Device[]): Finding[] {
       else vloop.union(a, b);
     }
   }
+
+  if (opts.loopsOnly) return out;
 
   // 2. Current-source cut-set: a part of the circuit joined to the rest only through
   //    ideal current sources. The currents must sum to zero or KCL fails.

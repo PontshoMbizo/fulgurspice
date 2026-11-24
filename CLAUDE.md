@@ -22,6 +22,11 @@ Simulink-style block simulator backed by Scilab) and deliberately shares its des
    equality: a pin or wire end anywhere on a wire connects; crossing wires do not.
 5. **One table for parts.** A new part is one entry in `SYMBOLS` (`src/core/symbols.ts`): geometry,
    pins, default value, SPICE card. Palette, canvas and netlister read from it.
+5b. **Subcircuits are sheets.** `Schematic.subckts` holds definitions (parts + wires, ports are `PORT`
+   parts); an instance is a `SUBCKT` part whose `value` is the definition's name and whose `ports`
+   snapshot (kept in step by `syncInstances`) lays out its pins. The one exception to "geometry comes
+   from `SYMBOLS`": use `symbolFor(part)` / `pinPositions(part)`, never `SYMBOLS[part.kind]`, for
+   anything placed. `compile()` emits each used definition once; `compile(sch, { sheet })` checks one.
 6. Catch mistakes in `compile()` (rule checks) before ngspice sees them; translate ngspice
    messages in `explain()` (`src/sim/result.ts`). The audience is learners.
 

@@ -112,6 +112,7 @@ html, body, #root { height: 100%; margin: 0; }
 .sym-body { fill: var(--sym-body); stroke: var(--sym); stroke-width: 1.6; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .sym-solid { fill: var(--sym); stroke: var(--sym); stroke-width: 1; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .part-hit { fill: transparent; stroke: none; }
+.pin-name { font-size: 7.5px; fill: var(--sym-text); pointer-events: none; }
 .part-ref, .part-value { font-size: 8.5px; fill: var(--sym-text); pointer-events: none; }
 .net-label { font-size: 9px; font-weight: 600; fill: var(--net-text); pointer-events: none; }
 .part.is-selected .sym, .part.is-selected .sym-body, .part.is-selected .sym-solid { stroke: var(--select); }
@@ -181,6 +182,13 @@ html, body, #root { height: 100%; margin: 0; }
 .op-table td, .op-table th { padding: 1px 16px 1px 0; text-align: left; font-weight: 400; }
 .op-table th { color: var(--ink-3); border-bottom: 1px solid var(--rule); }
 .op-table td.num { text-align: right; }
+
+.sheet-crumb { display: inline-flex; align-items: center; gap: 4px; margin-left: 12px; }
+.palette-subckt { display: flex; align-items: center; }
+.palette-subckt > button:first-child { flex: 1; min-width: 0; }
+.palette li.palette-subckt .palette-mini { width: 20px; padding: 2px 0; justify-content: center; color: var(--ink-3); }
+.palette li.palette-subckt .palette-mini:hover { color: #000; }
+.palette-new span { color: var(--ink-3); padding-left: 38px; }
 
 /* ------------------------------------------------------------------ marquee */
 .marquee { fill: rgb(0 120 215 / 0.08); stroke: #0078d7; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }

@@ -5,14 +5,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { route } from '../core/geometry';
 import type { Compiled } from '../core/netlist';
 import { onWire } from '../core/netlist';
-import { SYMBOLS, partBox, pinPositions } from '../core/symbols';
+import { SYMBOLS, partBox, pinPositions, symbolFor, toWorld } from '../core/symbols';
 import type { Part, PartKind, Point, Rot, Schematic } from '../core/types';
 import { formatSI } from '../core/units';
 import { addPart, addWires, moveItems } from './store';
 
 export const G = 10;
 export type Tool = 'select' | 'wire' | 'place' | 'probe';
-export interface Placing { kind: PartKind; rot: Rot; mirror: boolean }
+/** What the place tool is carrying. `value` and `ports` are set for a subcircuit instance. */
+export interface Placing { kind: PartKind; rot: Rot; mirror: boolean; value?: string; ports?: string[] }
 export type ProbeTarget = { node: string } | { part: Part };
 
 interface Props {
@@ -33,6 +34,8 @@ interface Props {
   onCancel: () => void;
   onCursor: (p: Point | null) => void;
   onZoom: (zoom: number) => void;
+  /** Double-click on a subcircuit instance. */
+  onOpenSubckt?: (name: string) => void;
 }
 
 interface View { panX: number; panY: number; zoom: number }
@@ -60,7 +63,7 @@ export function withLabelOffset(sch: Schematic, id: string, which: 'ref' | 'valu
 }
 
 function PartView({ part, selected, error, ghost, open }: { part: Part; selected?: boolean; error?: boolean; ghost?: boolean; open?: Point[] }) {
-  const def = SYMBOLS[part.kind];
+  const def = symbolFor(part);
   const [bx0, by0, bx1, by1] = def.box;
   const b = partBox(part);
   const cx = ((b.x0 + b.x1) / 2) * G, cy = ((b.y0 + b.y1) / 2) * G;
@@ -77,6 +80,16 @@ function PartView({ part, selected, error, ghost, open }: { part: Part; selected
       </g>
       {open?.map((p) => <circle key={`${p.x},${p.y}`} className="pin-open" cx={p.x * G} cy={p.y * G} r={2.2} />)}
       {part.kind === 'LABEL' && <text className="net-label" data-label="value" x={part.x * G + 5 + vo.x * G} y={part.y * G - 5 + vo.y * G}>{part.value}</text>}
+      {part.kind === 'PORT' && (() => {
+        // The name sits beyond the arrow, on whichever side mirroring and rotation put it.
+        const end = toWorld(part, 2.6, 0), dx = end.x - part.x, dy = end.y - part.y;
+        return <text className="net-label" data-label="value" textAnchor={dx > 0 ? 'start' : dx < 0 ? 'end' : 'middle'} x={end.x * G + vo.x * G} y={end.y * G + (dy === 0 ? 3 : dy > 0 ? 9 : -3) + vo.y * G}>{part.value}</text>;
+      })()}
+      {part.kind === 'SUBCKT' && def.pins.map((pin) => {
+        // Name each pin just inside the box. The text stays upright whatever the rotation.
+        const inward = toWorld(part, pin.x + (pin.x < 0 ? 1.8 : -1.8), pin.y);
+        return <text key={pin.name} className="pin-name" textAnchor="middle" x={inward.x * G} y={inward.y * G + 3}>{pin.name}</text>;
+      })}
       {def.prefix && (tall ? (
         <>
           <text className="part-ref" data-label="ref" x={b.x1 * G + 4 + ro.x * G} y={cy - 2 + ro.y * G}>{part.ref}</text>
@@ -168,7 +181,7 @@ export function SchematicCanvas(props: Props) {
     const hit = hitEl?.getAttribute('data-id') ?? null;
 
     if (tool === 'place' && placing) {
-      const next = addPart(sch, placing.kind, p.x, p.y, placing.rot, placing.mirror);
+      const next = addPart(sch, placing.kind, p.x, p.y, placing.rot, placing.mirror, { value: placing.value, ports: placing.ports });
       props.onCommit(next.sch);
       return;
     }
@@ -265,7 +278,7 @@ export function SchematicCanvas(props: Props) {
   const openPins = useMemo(() => {
     const out = new Map<string, Point[]>();
     for (const part of sch.parts) {
-      if (!SYMBOLS[part.kind].card) continue;
+      if (!symbolFor(part).card) continue;
       const open = pinPositions(part).filter((pin) =>
         !sch.wires.some((w) => onWire(w, pin.x, pin.y)) &&
         !sch.parts.some((o) => o.id !== part.id && pinPositions(o).some((q) => q.x === pin.x && q.y === pin.y)));
@@ -291,7 +304,7 @@ export function SchematicCanvas(props: Props) {
 
   const step = G * view.zoom;
   const ghost: Part | null = tool === 'place' && placing && cursor
-    ? { id: 'ghost', kind: placing.kind, ref: '', x: cursor.x, y: cursor.y, rot: placing.rot, mirror: placing.mirror, value: '' }
+    ? { id: 'ghost', kind: placing.kind, ref: '', x: cursor.x, y: cursor.y, rot: placing.rot, mirror: placing.mirror, value: placing.value ?? '', ports: placing.ports }
     : null;
 
   return (
@@ -303,6 +316,13 @@ export function SchematicCanvas(props: Props) {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerLeave={() => { setCursor(null); props.onCursor(null); }}
+        onDoubleClick={(e) => {
+          // The first click captured the pointer, so e.target is the canvas: find the part by position.
+          if (tool !== 'select') return;
+          const sc = sceneAt(e), px = sc.x / G, py = sc.y / G;
+          const part = sch.parts.find((x) => { if (x.kind !== 'SUBCKT') return false; const b = partBox(x); return px >= b.x0 && px <= b.x1 && py >= b.y0 && py <= b.y1; });
+          if (part?.value.trim()) props.onOpenSubckt?.(part.value.trim());
+        }}
         onContextMenu={(e) => { e.preventDefault(); if (draft) setDraft(null); else props.onCancel(); }}
       >
         <defs>

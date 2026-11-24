@@ -2,22 +2,57 @@
 
 import { pointKey, route } from '../core/geometry';
 import { onWire } from '../core/netlist';
-import { SYMBOLS, nextRef, pinPositions } from '../core/symbols';
-import { emptySchematic, type Part, type PartKind, type Point, type Rot, type Schematic, type Wire } from '../core/types';
+import { SUBCKT_NAME, SYMBOLS, nextRef, pinPositions, symbolFor } from '../core/symbols';
+import { syncInstances } from '../core/subckt';
+import { emptySchematic, type Part, type PartKind, type Point, type Rot, type Schematic, type Subckt, type Wire } from '../core/types';
 
 export interface Doc { sch: Schematic; past: Schematic[]; future: Schematic[] }
-export type DocAction = { type: 'commit'; sch: Schematic } | { type: 'load'; sch: Schematic } | { type: 'undo' } | { type: 'redo' };
+/** `sheet`: when set, `sch` is that subcircuit's sheet and is merged back into the document. */
+export type DocAction = { type: 'commit'; sch: Schematic; sheet?: string | null } | { type: 'load'; sch: Schematic } | { type: 'undo' } | { type: 'redo' };
 
 const HISTORY = 200;
 
 export function docReducer(doc: Doc, action: DocAction): Doc {
   switch (action.type) {
-    case 'commit': { const sch = normalizeWires(action.sch); return sch === doc.sch ? doc : { sch, past: [...doc.past.slice(-HISTORY + 1), doc.sch], future: [] }; }
-    case 'load': return { sch: normalizeWires(action.sch), past: [], future: [] };
+    case 'commit': { const sch = normalizeAll(withSheet(doc.sch, action.sheet ?? null, action.sch)); return sch === doc.sch ? doc : { sch, past: [...doc.past.slice(-HISTORY + 1), doc.sch], future: [] }; }
+    case 'load': return { sch: normalizeAll(action.sch), past: [], future: [] };
     case 'undo': return doc.past.length ? { sch: doc.past[doc.past.length - 1], past: doc.past.slice(0, -1), future: [doc.sch, ...doc.future] } : doc;
     case 'redo': return doc.future.length ? { sch: doc.future[0], past: [...doc.past, doc.sch], future: doc.future.slice(1) } : doc;
   }
 }
+
+/** normalizeWires on the top sheet and on every subcircuit's sheet, then refresh the
+ * port lists on instances so a symbol follows its definition. */
+export function normalizeAll(sch: Schematic): Schematic {
+  let out = normalizeWires(sch);
+  const subckts = out.subckts.map((s) => { const n = normalizeWires({ ...out, parts: s.parts, wires: s.wires }); return n.wires === s.wires ? s : { ...s, wires: n.wires }; });
+  if (subckts.some((s, i) => s !== out.subckts[i])) out = { ...out, subckts };
+  return syncInstances(out);
+}
+
+/** The sheet being edited as an ordinary Schematic: the top sheet when `name` is null. */
+export function sheetOf(sch: Schematic, name: string | null): Schematic {
+  const def = name === null ? undefined : sch.subckts.find((s) => s.name === name);
+  return def ? { ...sch, title: def.name, parts: def.parts, wires: def.wires } : sch;
+}
+
+/** Store an edited sheet back: the whole schematic when `name` is null, else just that subcircuit's parts and wires. */
+export function withSheet(sch: Schematic, name: string | null, next: Schematic): Schematic {
+  if (name === null) return next;
+  return { ...sch, subckts: sch.subckts.map((s) => (s.name === name ? { ...s, parts: next.parts, wires: next.wires } : s)) };
+}
+
+/** Why `name` cannot be used for a new subcircuit, or null when it can. */
+export function subcktNameProblem(sch: Schematic, name: string): string | null {
+  const n = name.trim();
+  if (!n) return 'Give the subcircuit a name';
+  if (!SUBCKT_NAME.test(n)) return 'Use letters, digits and underscores, not starting with a digit';
+  if (sch.subckts.some((s) => s.name.toLowerCase() === n.toLowerCase())) return `There is already a subcircuit called ${n}`;
+  return null;
+}
+
+export const addSubckt = (sch: Schematic, name: string): Schematic => ({ ...sch, subckts: [...sch.subckts, { name: name.trim(), parts: [], wires: [] }] });
+export const removeSubckt = (sch: Schematic, name: string): Schematic => ({ ...sch, subckts: sch.subckts.filter((s) => s.name !== name) });
 
 const isEnd = (w: Wire, x: number, y: number) => (w.x1 === x && w.y1 === y) || (w.x2 === x && w.y2 === y);
 
@@ -90,9 +125,17 @@ function mergeCollinear(sch: Schematic, wires: Wire[]): Wire[] {
 
 export const uid = () => Math.random().toString(36).slice(2, 10);
 
-export function addPart(sch: Schematic, kind: PartKind, x: number, y: number, rot: Rot, mirror: boolean): { sch: Schematic; id: string } {
-  const def = SYMBOLS[kind];
-  const part: Part = { id: uid(), kind, ref: nextRef(sch.parts, def.prefix), x, y, rot, mirror, value: def.defaultValue };
+/** A fresh port name: in, then out, then p3, p4, … so new ports never collide. */
+export function nextPortName(parts: Part[]): string {
+  const used = new Set(parts.filter((p) => p.kind === 'PORT').map((p) => p.value.trim().toLowerCase()));
+  for (const name of ['in', 'out']) if (!used.has(name)) return name;
+  for (let k = 3; ; k++) if (!used.has(`p${k}`)) return `p${k}`;
+}
+
+export function addPart(sch: Schematic, kind: PartKind, x: number, y: number, rot: Rot, mirror: boolean, extra: { value?: string; ports?: string[] } = {}): { sch: Schematic; id: string } {
+  const def = symbolFor({ kind, ports: extra.ports });
+  const part: Part = { id: uid(), kind, ref: nextRef(sch.parts, def.prefix), x, y, rot, mirror, value: extra.value ?? (kind === 'PORT' ? nextPortName(sch.parts) : def.defaultValue) };
+  if (extra.ports) part.ports = extra.ports;
   return { sch: { ...sch, parts: [...sch.parts, part] }, id: part.id };
 }
 
@@ -142,7 +185,7 @@ export function pasteItems(sch: Schematic, clip: Clipboard, dx: number, dy: numb
   const parts = [...sch.parts];
   const added: Part[] = [];
   for (const p of clip.parts) {
-    const prefix = SYMBOLS[p.kind].prefix;
+    const prefix = symbolFor(p).prefix;
     const copy: Part = { ...p, id: uid(), x: p.x + dx, y: p.y + dy, ref: prefix ? nextRef(parts, prefix) : '' };
     parts.push(copy); added.push(copy);
   }
@@ -193,7 +236,7 @@ export function parseSchematic(text: string): Schematic {
   if (!d || d.format !== 'fulgurspice-schematic') throw new Error('That is not a fulgurspice schematic');
   if (d.version !== 1) throw new Error(`Schematic version ${String(d.version)} is newer than this editor`);
   const int = (v: unknown) => { if (!Number.isInteger(v)) throw new Error('Schematic has an off-grid coordinate'); return v as number; };
-  const parts = (Array.isArray(d.parts) ? d.parts : []).map((p): Part => {
+  const parsePart = (p: Part): Part => {
     if (!p || !(p.kind in SYMBOLS)) throw new Error(`Unknown part kind "${String(p?.kind)}"`);
     if (![0, 90, 180, 270].includes(p.rot)) throw new Error('Schematic has a bad rotation');
     const off = (o: unknown): Point | undefined => { const q = o as Point | undefined; return q && (q.x || q.y) ? { x: int(q.x), y: int(q.y) } : undefined; };
@@ -201,13 +244,20 @@ export function parseSchematic(text: string): Schematic {
     const refOffset = off(p.refOffset), valueOffset = off(p.valueOffset);
     if (refOffset) part.refOffset = refOffset;
     if (valueOffset) part.valueOffset = valueOffset;
+    if (p.kind === 'SUBCKT' && Array.isArray(p.ports)) part.ports = p.ports.map(String);
     return part;
+  };
+  const parseWire = (w: Wire): Wire => ({ id: String(w.id || uid()), x1: int(w.x1), y1: int(w.y1), x2: int(w.x2), y2: int(w.y2) });
+  const parts = (Array.isArray(d.parts) ? d.parts : []).map(parsePart);
+  const wires = (Array.isArray(d.wires) ? d.wires : []).map(parseWire);
+  const subckts = (Array.isArray(d.subckts) ? d.subckts : []).map((s): Subckt => {
+    if (!s || !SUBCKT_NAME.test(String(s.name))) throw new Error(`Bad subcircuit name "${String(s?.name)}"`);
+    return { name: String(s.name), parts: (Array.isArray(s.parts) ? s.parts : []).map(parsePart), wires: (Array.isArray(s.wires) ? s.wires : []).map(parseWire) };
   });
-  const wires = (Array.isArray(d.wires) ? d.wires : []).map((w): Wire => ({ id: String(w.id || uid()), x1: int(w.x1), y1: int(w.y1), x2: int(w.x2), y2: int(w.y2) }));
   const base = emptySchematic();
   const a = d.analysis;
   const analysis = a && ['tran', 'ac', 'dc', 'op'].includes(a.kind) ? a : base.analysis;
-  return { ...base, title: String(d.title ?? base.title), parts, wires, analysis, directives: String(d.directives ?? '') };
+  return syncInstances({ ...base, title: String(d.title ?? base.title), parts, wires, analysis, directives: String(d.directives ?? ''), subckts });
 }
 
 const KEY = 'fulgurspice:schematic';

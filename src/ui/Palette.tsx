@@ -1,5 +1,6 @@
-import { SYMBOLS, type SymbolDef } from '../core/symbols';
-import type { PartKind } from '../core/types';
+import { SYMBOLS, subcktSymbol, type SymbolDef } from '../core/symbols';
+import { subcktPorts } from '../core/subckt';
+import type { PartKind, Subckt } from '../core/types';
 
 const GROUPS: SymbolDef['group'][] = ['Connectivity', 'Passive', 'Sources', 'Semiconductors'];
 
@@ -16,7 +17,19 @@ function Glyph({ def }: { def: SymbolDef }) {
   );
 }
 
-export function Palette({ active, onPick }: { active: PartKind | null; onPick: (kind: PartKind) => void }) {
+interface PaletteProps {
+  /** The kind being placed, and for a subcircuit which one. */
+  active: PartKind | null;
+  activeSubckt: string | null;
+  subckts: Subckt[];
+  onPick: (kind: PartKind) => void;
+  onPickSubckt: (name: string) => void;
+  onOpenSubckt: (name: string) => void;
+  onNewSubckt: () => void;
+  onDeleteSubckt: (name: string) => void;
+}
+
+export function Palette({ active, activeSubckt, subckts, onPick, onPickSubckt, onOpenSubckt, onNewSubckt, onDeleteSubckt }: PaletteProps) {
   return (
     <aside className="palette" aria-label="Parts">
       <div className="panel-title">Parts</div>
@@ -27,7 +40,7 @@ export function Palette({ active, onPick }: { active: PartKind | null; onPick: (
             <ul>
               {Object.values(SYMBOLS).filter((d) => d.group === group).map((def) => (
                 <li key={def.kind}>
-                  <button type="button" aria-pressed={active === def.kind} onClick={() => onPick(def.kind)}>
+                  <button type="button" aria-pressed={active === def.kind && !activeSubckt} onClick={() => onPick(def.kind)}>
                     <Glyph def={def} />
                     <span>{def.label}</span>
                   </button>
@@ -36,6 +49,22 @@ export function Palette({ active, onPick }: { active: PartKind | null; onPick: (
             </ul>
           </section>
         ))}
+        <section>
+          <div className="palette-group">Subcircuits</div>
+          <ul>
+            {subckts.map((s) => (
+              <li key={s.name} className="palette-subckt">
+                <button type="button" aria-pressed={activeSubckt === s.name} title="Place an instance" onClick={() => onPickSubckt(s.name)}>
+                  <Glyph def={subcktSymbol(subcktPorts(s))} />
+                  <span>{s.name}</span>
+                </button>
+                <button type="button" className="palette-mini" title={`Edit ${s.name}`} aria-label={`Edit ${s.name}`} onClick={() => onOpenSubckt(s.name)}>✎</button>
+                <button type="button" className="palette-mini" title={`Delete ${s.name}`} aria-label={`Delete ${s.name}`} onClick={() => onDeleteSubckt(s.name)}>×</button>
+              </li>
+            ))}
+            <li><button type="button" className="palette-new" onClick={onNewSubckt}><span>New subcircuit…</span></button></li>
+          </ul>
+        </section>
       </div>
     </aside>
   );

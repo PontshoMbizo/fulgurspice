@@ -3,7 +3,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { Compiled } from '../core/netlist';
-import { SYMBOLS } from '../core/symbols';
+import { symbolFor } from '../core/symbols';
+import { subcktPorts } from '../core/subckt';
 import type { Analysis, Schematic } from '../core/types';
 import { patchParts } from './store';
 
@@ -54,24 +55,32 @@ interface Props {
   onRotate: () => void;
   onMirror: () => void;
   onDelete: () => void;
+  /** Name of the subcircuit whose sheet is open, or null on the top sheet. */
+  editing: string | null;
+  onOpenSubckt: (name: string) => void;
 }
 
-export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRotate, onMirror, onDelete }: Props) {
+export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRotate, onMirror, onDelete, editing, onOpenSubckt }: Props) {
   const parts = sch.parts.filter((p) => selection.has(p.id));
   const part = selection.size === 1 && parts.length === 1 ? parts[0] : null;
-  const def = part ? SYMBOLS[part.kind] : null;
+  const def = part ? symbolFor(part) : null;
   const a = sch.analysis;
   const setA = (next: Analysis) => onCommit({ ...sch, analysis: next });
 
   return (
     <aside className="inspector" aria-label="Properties">
-      <div className="panel-title">{part ? def!.label : selection.size ? `${selection.size} selected` : 'Simulation'}</div>
+      <div className="panel-title">{part ? def!.label : selection.size ? `${selection.size} selected` : editing !== null ? `Subcircuit ${editing}` : 'Simulation'}</div>
       <div className="inspector-body">
         {part && def ? (
           <fieldset className="etched">
             <legend>Properties</legend>
             {def.prefix && <Field label="Reference" value={part.ref} mono onCommit={(v) => onCommit(patchParts(sch, selection, () => ({ ref: v.trim() })))} />}
             {def.valueLabel && <Field label={def.valueLabel} value={part.value} hint={def.valueHint} mono onCommit={(v) => onCommit(patchParts(sch, selection, () => ({ value: v })))} />}
+            {part.kind === 'SUBCKT' && (
+              <div className="row-buttons">
+                <button type="button" className="btn" disabled={!part.value.trim()} onClick={() => onOpenSubckt(part.value.trim())}>Open subcircuit</button>
+              </div>
+            )}
             <div className="row-buttons">
               <button type="button" className="btn" onClick={onRotate}>Rotate</button>
               <button type="button" className="btn" onClick={onMirror}>Mirror</button>
@@ -91,6 +100,13 @@ export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRota
               <button type="button" className="btn" onClick={onMirror} disabled={!parts.length}>Mirror</button>
               <button type="button" className="btn btn-delete" onClick={onDelete}>Delete</button>
             </div>
+          </fieldset>
+        ) : editing !== null ? (
+          <fieldset className="etched">
+            <legend>Subcircuit</legend>
+            <p className="hint">Drawing the inside of <strong>{editing}</strong>. Each <em>Subcircuit port</em> part becomes a pin on its symbol, in the order you place them.</p>
+            <p className="hint">Ports: {subcktPorts(sch).length ? <span className="mono">{subcktPorts(sch).join(', ')}</span> : 'none yet'}</p>
+            <p className="hint">Press Run to simulate the whole circuit. Use “Top sheet” in the menu bar to go back.</p>
           </fieldset>
         ) : (
           <>

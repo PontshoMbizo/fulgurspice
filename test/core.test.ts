@@ -6,7 +6,9 @@ import { emptySchematic, type Part, type Schematic } from '../src/core/types';
 import { pinPositions, toWorld } from '../src/core/symbols';
 import { topologyFindings, type Device } from '../src/core/rules';
 import { vectorLabel } from '../src/sim/result';
-import { copyItems, moveItems, normalizeWires, parseSchematic, pasteItems, removeWireSpan } from '../src/ui/store';
+import { addPart, addSubckt, copyItems, moveItems, normalizeAll, normalizeWires, parseSchematic, pasteItems, removeSubckt, removeWireSpan, sheetOf, subcktNameProblem, withSheet } from '../src/ui/store';
+import { subcktPorts, syncInstances } from '../src/core/subckt';
+import { pinPositions as pinsOf, subcktSymbol } from '../src/core/symbols';
 import { withLabelOffset } from '../src/ui/SchematicCanvas';
 
 const close = (a: number | null, b: number) => expect(Math.abs((a ?? NaN) - b)).toBeLessThan(Math.abs(b) * 1e-9 + 1e-30);
@@ -132,6 +134,107 @@ describe('topology rules', () => {
     expect(out.issues.map((i) => i.message).join(' | ')).toMatch(/V2 closes a loop/);
     const dangling = compile(sch([P('V', 'V1', 0, 0, '5'), P('V', 'V2', 4, 0, '3'), P('GND', '', 0, 2, '')], [[0, 2, 4, 2]]));
     expect(dangling.issues.map((i) => i.message).join(' | ')).not.toMatch(/closes a loop/);
+  });
+});
+
+describe('subcircuits', () => {
+  const ex = () => EXAMPLES.find((e) => /Two RC stages/.test(e.name))!.build();
+  it('lays pins out from the port list: half down each side, on integer coordinates', () => {
+    expect(subcktSymbol(['in', 'out']).pins).toEqual([{ name: 'in', x: -3, y: 0 }, { name: 'out', x: 3, y: 0 }]);
+    const five = subcktSymbol(['a', 'b', 'c', 'd', 'e']);
+    expect(five.pins.filter((p) => p.x < 0).map((p) => p.name)).toEqual(['a', 'b', 'c']);
+    expect(five.pins.filter((p) => p.x > 0).map((p) => p.name)).toEqual(['d', 'e']);
+    for (const p of five.pins) { expect(Number.isInteger(p.x)).toBe(true); expect(Number.isInteger(p.y)).toBe(true); }
+    expect(new Set(five.pins.map((p) => `${p.x},${p.y}`)).size).toBe(5);
+  });
+  it('emits the definition once, however many instances, and keeps inner references local', () => {
+    const c = compile(ex());
+    expect(c.issues).toEqual([]);
+    const lines = c.netlist.split('\n');
+    expect(lines.filter((l) => l.startsWith('.subckt'))).toEqual(['.subckt RCSTAGE in out']);
+    expect(lines).toContain('X1 in mid RCSTAGE');
+    expect(lines).toContain('X2 mid out RCSTAGE');
+    expect(lines.indexOf('.ends RCSTAGE')).toBeLessThan(lines.indexOf('V1 in 0 AC 1'));
+    expect(lines.filter((l) => /^R1 /.test(l))).toHaveLength(2); // one inside, one on top: no clash
+  });
+  it('does not emit a definition nothing uses', () => {
+    const s = ex();
+    const unused = { ...s, parts: s.parts.filter((p) => p.kind !== 'SUBCKT'), wires: [], subckts: s.subckts };
+    expect(compile(unused).netlist).not.toContain('.subckt');
+  });
+  it('reports a missing definition, a bad name, and a subcircuit placed inside itself', () => {
+    const s = ex();
+    const gone = compile({ ...s, subckts: [] });
+    expect(gone.ok).toBe(false);
+    expect(gone.issues.map((i) => i.message).join('|')).toMatch(/X1: there is no subcircuit called "RCSTAGE"/);
+    const selfRef: Schematic = { ...s, subckts: [{ ...s.subckts[0], parts: [...s.subckts[0].parts, { ...P('SUBCKT', 'X1', 30, 0, 'RCSTAGE'), ports: ['in', 'out'] }] }] };
+    expect(compile(selfRef).issues.map((i) => i.message).join('|')).toMatch(/RCSTAGE contains itself \(RCSTAGE → RCSTAGE\)/);
+  });
+  it('checks the inside of a subcircuit, and prefixes where the problem is', () => {
+    const s = ex();
+    const broken: Schematic = { ...s, subckts: [{ ...s.subckts[0], parts: s.subckts[0].parts.map((p) => (p.kind === 'R' ? { ...p, value: 'lots' } : p)) }] };
+    const c = compile(broken);
+    expect(c.ok).toBe(false);
+    expect(c.issues.map((i) => i.message)).toContain('In subcircuit RCSTAGE: R1: "lots" is not a number');
+  });
+  it('compiles one sheet on its own for editing: no ground needed, ports are connected, ids resolve', () => {
+    const s = ex();
+    const c = compile(s, { sheet: 'RCSTAGE' });
+    expect(c.issues).toEqual([]);
+    expect(c.netlist).toBe('.subckt RCSTAGE in out\nR1 out in 1000\nC1 out 0 1e-7\n.ends RCSTAGE\n');
+    const port = s.subckts[0].parts.find((p) => p.kind === 'PORT')!;
+    expect(c.pinNode.get(`${port.id}:port`)).toBe('in');
+    expect(compile(s, { sheet: 'nope' }).ok).toBe(false);
+  });
+  it('warns about an unconnected port and errors on duplicate or ground-named ports', () => {
+    const s = ex();
+    const def = s.subckts[0];
+    const withPort = (name: string, x: number): Schematic => ({ ...s, subckts: [{ ...def, parts: [...def.parts, P('PORT', '', x, 10, name)] }] });
+    expect(compile(withPort('spare', 30), { sheet: 'RCSTAGE' }).issues.map((i) => `${i.level}: ${i.message}`)).toContain('warning: Port "spare" is not connected to anything inside the subcircuit');
+    expect(compile(withPort('in', 30), { sheet: 'RCSTAGE' }).issues.some((i) => i.level === 'error' && /Two ports are called "in"/.test(i.message))).toBe(true);
+    expect(compile(withPort('gnd', 30), { sheet: 'RCSTAGE' }).issues.some((i) => i.level === 'error' && /cannot be called ground/.test(i.message))).toBe(true);
+  });
+  it('keeps instances in step with their definition when ports change', () => {
+    const s = ex();
+    const def = s.subckts[0];
+    const more: Schematic = { ...s, subckts: [{ ...def, parts: [...def.parts, P('PORT', '', 30, 10, 'gnd2')] }] };
+    expect(syncInstances(s)).toBe(s); // already in step: same object
+    const synced = normalizeAll(more);
+    expect(synced.parts.filter((p) => p.kind === 'SUBCKT').every((p) => p.ports!.join() === 'in,out,gnd2')).toBe(true);
+    expect(pinsOf(synced.parts.find((p) => p.ref === 'X1')!)).toHaveLength(3);
+    expect(subcktPorts(more.subckts[0])).toEqual(['in', 'out', 'gnd2']);
+  });
+  it('round-trips through save and load, including instance ports and definitions', () => {
+    const s = ex();
+    const back = parseSchematic(JSON.stringify(s));
+    expect(back.subckts).toHaveLength(1);
+    expect(back.subckts[0].parts.filter((p) => p.kind === 'PORT').map((p) => p.value)).toEqual(['in', 'out']);
+    expect(compile(back).netlist).toBe(compile(s).netlist);
+    expect(parseSchematic(JSON.stringify({ ...emptySchematic(), subckts: undefined })).subckts).toEqual([]); // files from before subcircuits
+    expect(() => parseSchematic(JSON.stringify({ ...s, subckts: [{ name: '1bad', parts: [], wires: [] }] }))).toThrow(/Bad subcircuit name/);
+  });
+  it('edits a subcircuit sheet in place without touching the top sheet', () => {
+    const s = ex();
+    const view = sheetOf(s, 'RCSTAGE');
+    expect(view.parts).toBe(s.subckts[0].parts);
+    const edited = withSheet(s, 'RCSTAGE', { ...view, parts: view.parts.filter((p) => p.kind !== 'C') });
+    expect(edited.parts).toBe(s.parts);
+    expect(edited.subckts[0].parts.some((p) => p.kind === 'C')).toBe(false);
+    expect(sheetOf(s, null)).toBe(s);
+  });
+  it('creates, validates and removes definitions; places instances with their ports', () => {
+    let s = emptySchematic();
+    expect(subcktNameProblem(s, '')).toMatch(/name/);
+    expect(subcktNameProblem(s, '1x')).toMatch(/letters/);
+    s = addSubckt(s, 'Amp');
+    expect(subcktNameProblem(s, 'amp')).toMatch(/already/);
+    const placed = addPart(s, 'SUBCKT', 4, 4, 0, false, { value: 'Amp', ports: ['a', 'b', 'c'] });
+    expect(placed.sch.parts[0]).toMatchObject({ kind: 'SUBCKT', ref: 'X1', value: 'Amp', ports: ['a', 'b', 'c'] });
+    expect(removeSubckt(placed.sch, 'Amp').subckts).toEqual([]);
+    let sheet = emptySchematic();
+    const names: string[] = [];
+    for (let i = 0; i < 4; i++) { const r = addPart(sheet, 'PORT', i * 6, 0, 0, false); sheet = r.sch; names.push(r.sch.parts[i].value); }
+    expect(names).toEqual(['in', 'out', 'p3', 'p4']);
   });
 });
 

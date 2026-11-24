@@ -49,6 +49,24 @@ describe('ngspice end to end', () => {
     const phase = (Math.atan2(out.im![k], out.re[k]) * 180) / Math.PI;
     expect(phase).toBeGreaterThan(-52); expect(phase).toBeLessThan(-40);
   });
+  it('two RC stages from one subcircuit match the closed-form cascade 1/(s²τ²+3sτ+1)', async () => {
+    const r = await runExample(/Two RC stages/);
+    expect(r.ok).toBe(true);
+    expect(r.messages).toEqual([]);
+    const out = vec(r, 'v(out)');
+    const tau = 1e3 * 100e-9;
+    r.x!.re.forEach((f, i) => {
+      const s = 2 * Math.PI * f * tau;
+      const dr = 1 - s * s, di = 3 * s; // denominator = (1 - s²) + j3s
+      const mag = 1 / Math.hypot(dr, di);
+      expect(Math.hypot(out.re[i], out.im![i]), `|H| at ${f} Hz`).toBeCloseTo(mag, 3);
+    });
+    // The two stages load each other, so the middle node sits above out and below in.
+    const mid = vec(r, 'v(mid)');
+    const k = r.x!.re.findIndex((f) => f > 1500);
+    expect(Math.hypot(mid.re[k], mid.im![k])).toBeGreaterThan(Math.hypot(out.re[k], out.im![k]));
+    expect(Math.hypot(mid.re[k], mid.im![k])).toBeLessThan(1);
+  });
   it('half-wave rectifier: output peaks one diode drop below 5 V and never goes negative', async () => {
     const r = await runExample(/rectifier/);
     const out = vec(r, 'v(out)').re;

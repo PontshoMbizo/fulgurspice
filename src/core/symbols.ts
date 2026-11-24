@@ -10,7 +10,7 @@ export interface Pin { name: string; x: number; y: number }
 export interface SymbolDef {
   kind: PartKind;
   label: string;
-  group: 'Passive' | 'Sources' | 'Semiconductors' | 'Connectivity';
+  group: 'Passive' | 'Sources' | 'Semiconductors' | 'Connectivity' | 'Subcircuits';
   /** Reference prefix (R, C, Q). Empty = no designator. */
   prefix: string;
   pins: Pin[];
@@ -81,6 +81,18 @@ export const SYMBOLS: Record<PartKind, SymbolDef> = {
     path: 'M-0.15 -0.15H0.15V0.15H-0.15Z', box: [-0.2, -1.1, 2.4, 0.2],
     defaultValue: 'out', valueLabel: 'Net name', valueHint: 'Nets with the same name are connected',
     card: null,
+  },
+  PORT: {
+    kind: 'PORT', label: 'Subcircuit port', group: 'Connectivity', prefix: '', pins: [{ name: 'port', x: 0, y: 0 }],
+    path: 'M0 0L0.6 -0.6H2.2V0.6H0.6Z', box: [-0.2, -0.8, 5, 0.8],
+    defaultValue: 'in', valueLabel: 'Port name', valueHint: 'How this connection appears on the subcircuit symbol. Order of placement = pin order',
+    card: null,
+  },
+  SUBCKT: {
+    kind: 'SUBCKT', label: 'Subcircuit', group: 'Subcircuits', prefix: 'X', pins: [],
+    path: '', box: [-2, -2, 2, 2],
+    defaultValue: '', valueLabel: 'Subcircuit', valueHint: 'Name of a subcircuit defined in this schematic',
+    card: (p, n) => `X${p.ref.slice(1)} ${n.join(' ')} ${p.value.trim().replace(/\s+/g, '_')}`,
   },
   D: {
     kind: 'D', label: 'Diode', group: 'Semiconductors', prefix: 'D',
@@ -153,13 +165,42 @@ export function toWorld(part: Pick<Part, 'x' | 'y' | 'rot' | 'mirror'>, x: numbe
   }
 }
 
+/** A subcircuit name SPICE will accept: letters, digits and underscore, not starting with a digit. */
+export const SUBCKT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+const generated = new Map<string, SymbolDef>();
+
+/** The box-with-pins symbol for a subcircuit with these ports: half the pins down each side. */
+export function subcktSymbol(ports: string[]): SymbolDef {
+  const key = ports.join('\u0000');
+  let def = generated.get(key);
+  if (def) return def;
+  const left = Math.ceil(ports.length / 2);
+  const rows = Math.max(left, ports.length - left, 1);
+  const y = (i: number) => 2 * i - (rows - 1);
+  const pins: Pin[] = ports.map((name, i) => (i < left ? { name, x: -3, y: y(i) } : { name, x: 3, y: y(i - left) }));
+  def = {
+    ...SYMBOLS.SUBCKT, pins,
+    path: pins.map((p) => `M${p.x} ${p.y}H${p.x < 0 ? -2 : 2}`).join(''),
+    body: `M-2 ${-rows}H2V${rows}H-2Z`,
+    box: [-3, -rows, 3, rows],
+  };
+  generated.set(key, def);
+  return def;
+}
+
+/** The symbol for a placed part. Fixed for most kinds; built from `ports` for a subcircuit instance. */
+export function symbolFor(part: Pick<Part, 'kind' | 'ports'>): SymbolDef {
+  return part.kind === 'SUBCKT' ? subcktSymbol(part.ports ?? []) : SYMBOLS[part.kind];
+}
+
 export function pinPositions(part: Part): (Pin & Point)[] {
-  return SYMBOLS[part.kind].pins.map((pin) => ({ ...pin, ...toWorld(part, pin.x, pin.y) }));
+  return symbolFor(part).pins.map((pin) => ({ ...pin, ...toWorld(part, pin.x, pin.y) }));
 }
 
 /** Axis-aligned extent of a placed part, in grid units. */
 export function partBox(part: Part): { x0: number; y0: number; x1: number; y1: number } {
-  const [bx0, by0, bx1, by1] = SYMBOLS[part.kind].box;
+  const [bx0, by0, bx1, by1] = symbolFor(part).box;
   const a = toWorld(part, bx0, by0);
   const b = toWorld(part, bx1, by1);
   return { x0: Math.min(a.x, b.x), y0: Math.min(a.y, b.y), x1: Math.max(a.x, b.x), y1: Math.max(a.y, b.y) };
