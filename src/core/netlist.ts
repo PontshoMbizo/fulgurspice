@@ -8,6 +8,7 @@
 import type { Analysis, Part, Point, Schematic, Subckt, Wire } from './types';
 import { pointKey } from './geometry';
 import { topologyFindings, type Device } from './rules';
+import { dotParamNames, exprNames, formatParams, parseParams } from './params';
 import { subcktPorts } from './subckt';
 import { MODELS, SUBCKT_NAME, pinPositions, symbolFor } from './symbols';
 import { parseSI, toSpice } from './units';
@@ -78,7 +79,13 @@ export function analysisLine(a: Analysis, parts: Part[], issues: Issue[]): strin
 export interface CompileOptions {
   /** Compile this subcircuit's own sheet (for editing it) instead of the top sheet. */
   sheet?: string;
+  /** With `sheet`: build a runnable netlist from that sheet on its own, test bench parts and all. */
+  standalone?: boolean;
 }
+
+/** top: the document's main sheet. sub: a definition as emitted (test bench left out).
+ * view: a definition as drawn, for editing. standalone: a definition run as a circuit. */
+type Mode = 'top' | 'sub' | 'view' | 'standalone';
 
 interface Sheet { parts: Part[]; wires: Wire[] }
 
@@ -96,7 +103,9 @@ interface SheetOut {
 }
 
 /** Turn one sheet (the top one, or a subcircuit's) into nodes, checks and cards. */
-function analyseSheet(sheet: Sheet, sub: boolean, defs: Map<string, Subckt>): SheetOut {
+function analyseSheet(sheetIn: Sheet, mode: Mode, defs: Map<string, Subckt>, scope: Set<string>): SheetOut {
+  const sub = mode === 'sub' || mode === 'view'; // ports mean something, and there is no ground of its own
+  const sheet: Sheet = mode === 'sub' ? { ...sheetIn, parts: sheetIn.parts.filter((p) => !p.bench) } : sheetIn;
   const issues: Issue[] = [];
   const uf = new UnionFind();
   const points = new Map<string, Point>();
@@ -115,10 +124,12 @@ function analyseSheet(sheet: Sheet, sub: boolean, defs: Map<string, Subckt>): Sh
     const name = part.kind === 'GND' ? '0' : part.kind === 'LABEL' || isPort ? netName(part.value) : null;
     if (name === null) continue;
     if (isPort) {
-      if (!sub) { issues.push({ level: 'warning', message: `Port "${part.value}" is only meaningful inside a subcircuit: it does nothing here`, partId: part.id }); continue; }
+      if (mode === 'top') { issues.push({ level: 'warning', message: `Port "${part.value}" is only meaningful inside a subcircuit: it does nothing here`, partId: part.id }); continue; }
       if (!name) { issues.push({ level: 'error', message: 'A port has no name', partId: part.id }); continue; }
-      if (name === '0') { issues.push({ level: 'error', message: 'A port cannot be called ground: ground is already shared with the outside', partId: part.id }); continue; }
-      portKeys.push({ part, k, name });
+      if (sub) {
+        if (name === '0') { issues.push({ level: 'error', message: 'A port cannot be called ground: ground is already shared with the outside', partId: part.id }); continue; }
+        portKeys.push({ part, k, name });
+      } // standalone: the port is just a named net, like a label
     }
     if (!name) { issues.push({ level: 'error', message: 'A net label has no name', partId: part.id }); continue; }
     if (named.has(name)) uf.union(k, named.get(name)!); else named.set(name, k);
@@ -161,6 +172,9 @@ function analyseSheet(sheet: Sheet, sub: boolean, defs: Map<string, Subckt>): Sh
     else if (!ref.startsWith(def.prefix)) issues.push({ level: 'error', message: `${p.ref}: a ${def.label.toLowerCase()} reference must start with ${def.prefix}`, partId: p.id });
     if (refs.has(ref)) issues.push({ level: 'error', message: `Two parts are called ${p.ref}`, partId: p.id });
     refs.set(ref, p);
+    // An undefined {name} makes ngspice spin forever, so refuse it here, where the cause can be named.
+    const unknown = exprNames(p.value).filter((n) => !scope.has(n));
+    if (unknown.length) issues.push({ level: 'error', message: `${p.ref}: ${p.value.trim()} uses ${unknown.join(', ')}, which ${unknown.length === 1 ? 'is' : 'are'} not defined. Add ${unknown.length === 1 ? 'it' : 'them'} as subcircuit parameters, or with .param in the SPICE directives`, partId: p.id });
     if (!p.value.trim()) issues.push({ level: 'error', message: `${p.ref} has no value`, partId: p.id });
     else if (p.kind === 'R' || p.kind === 'C' || p.kind === 'L') {
       const v = parseSI(p.value);
@@ -168,7 +182,18 @@ function analyseSheet(sheet: Sheet, sub: boolean, defs: Map<string, Subckt>): Sh
       else if (v !== null && !(v > 0)) issues.push({ level: 'error', message: `${p.ref}: value must be greater than zero`, partId: p.id });
     } else if (p.kind === 'SUBCKT' && p.value.trim()) {
       if (!SUBCKT_NAME.test(p.value.trim())) issues.push({ level: 'error', message: `${p.ref}: "${p.value}" is not a valid subcircuit name`, partId: p.id });
-      else if (!defs.has(p.value.trim().toLowerCase())) issues.push({ level: 'error', message: `${p.ref}: there is no subcircuit called "${p.value.trim()}"`, partId: p.id });
+      else {
+        const def = defs.get(p.value.trim().toLowerCase());
+        if (!def) issues.push({ level: 'error', message: `${p.ref}: there is no subcircuit called "${p.value.trim()}"`, partId: p.id });
+        else {
+          // ngspice ignores an unknown parameter without a word, so a typo would silently do nothing.
+          const given = parseParams(p.params), known = parseParams(def.params).items.map((q) => q.name);
+          const free = given.items.flatMap((q) => exprNames(q.value)).filter((n) => !scope.has(n));
+          if (given.error) issues.push({ level: 'error', message: `${p.ref}: ${given.error}`, partId: p.id });
+          else if (free.length) issues.push({ level: 'error', message: `${p.ref}: parameters use ${[...new Set(free)].join(', ')}, which is not defined here`, partId: p.id });
+          else for (const q of given.items) if (!known.some((k) => k.toLowerCase() === q.name.toLowerCase())) issues.push({ level: 'error', message: `${p.ref}: ${def.name} has no parameter "${q.name}"${known.length ? ` (it has ${known.join(', ')})` : ' (it has none)'}`, partId: p.id });
+        }
+      }
     }
   }
 
@@ -229,28 +254,49 @@ function analyseSheet(sheet: Sheet, sub: boolean, defs: Map<string, Subckt>): Sh
   };
 }
 
-const subcktBlock = (def: Subckt, out: SheetOut) => [`.subckt ${def.name} ${out.portNodes.join(' ')}`.trimEnd(), ...out.cards, `.ends ${def.name}`];
+const subcktBlock = (def: Subckt, out: SheetOut) => {
+  const params = formatParams(parseParams(def.params).items);
+  return [[`.subckt ${def.name}`, ...out.portNodes, params && `params: ${params}`].filter(Boolean).join(' '), ...out.cards, `.ends ${def.name}`];
+};
 
 /** Names of the subcircuits a sheet instantiates, in order of first use. */
 const usedBy = (parts: Part[]) => [...new Set(parts.filter((p) => p.kind === 'SUBCKT').map((p) => p.value.trim().toLowerCase()))];
 
+/** Problems with a definition's own parameter list. */
+const paramIssues = (def: Subckt): Issue[] => {
+  const { error } = parseParams(def.params);
+  return error ? [{ level: 'error', message: `Parameters: ${error}` }] : [];
+};
+
 export function compile(sch: Schematic, opts: CompileOptions = {}): Compiled {
   const defs = new Map((sch.subckts ?? []).map((s) => [s.name.toLowerCase(), s]));
+  const missing = (name: string): Compiled => ({ netlist: '', issues: [{ level: 'error', message: `There is no subcircuit called "${name}"` }], ok: false, pinNode: new Map(), wireNode: new Map(), nodes: [], junctions: [] });
 
-  if (opts.sheet !== undefined) {
-    const def = defs.get(opts.sheet.toLowerCase());
-    if (!def) return { netlist: '', issues: [{ level: 'error', message: `There is no subcircuit called "${opts.sheet}"` }], ok: false, pinNode: new Map(), wireNode: new Map(), nodes: [], junctions: [] };
-    const out = analyseSheet(def, true, defs);
-    if (!SUBCKT_NAME.test(def.name)) out.issues.push({ level: 'error', message: `"${def.name}" is not a valid subcircuit name` });
-    if (!subcktPorts(def).length) out.issues.push({ level: 'warning', message: 'This subcircuit has no ports yet: place Subcircuit port parts to give it connections' });
-    return { netlist: subcktBlock(def, out).join('\n') + '\n', issues: out.issues, ok: !out.issues.some((i) => i.level === 'error'), pinNode: out.pinNode, wireNode: out.wireNode, nodes: out.nodes, junctions: out.junctions };
+  // One sheet as it is drawn, for the editor: its own nets and problems, the definition as its netlist.
+  const viewDef = opts.sheet !== undefined && !opts.standalone ? defs.get(opts.sheet.toLowerCase()) : undefined;
+  if (opts.sheet !== undefined && !opts.standalone) {
+    if (!viewDef) return missing(opts.sheet);
+    const scopeOf = new Set([...dotParamNames(sch.directives), ...parseParams(viewDef.params).items.map((q) => q.name.toLowerCase())]);
+    const drawn = analyseSheet(viewDef, 'view', defs, scopeOf);
+    const emitted = analyseSheet(viewDef, 'sub', defs, scopeOf);
+    drawn.issues.push(...paramIssues(viewDef));
+    if (!SUBCKT_NAME.test(viewDef.name)) drawn.issues.push({ level: 'error', message: `"${viewDef.name}" is not a valid subcircuit name` });
+    if (!subcktPorts(viewDef).length) drawn.issues.push({ level: 'warning', message: 'This subcircuit has no ports yet: place Subcircuit port parts to give it connections' });
+    return { netlist: subcktBlock(viewDef, emitted).join('\n') + '\n', issues: drawn.issues, ok: !drawn.issues.some((i) => i.level === 'error'), pinNode: drawn.pinNode, wireNode: drawn.wireNode, nodes: drawn.nodes, junctions: drawn.junctions };
   }
 
-  const top = analyseSheet(sch, false, defs);
+  // The main sheet: the document's, or (standalone) a subcircuit's own, run as a circuit.
+  const standaloneDef = opts.standalone && opts.sheet !== undefined ? defs.get(opts.sheet.toLowerCase()) : undefined;
+  if (opts.standalone && opts.sheet !== undefined && !standaloneDef) return missing(opts.sheet);
+  const mainParts = standaloneDef ? standaloneDef.parts : sch.parts;
+  const globals = dotParamNames(sch.directives);
+  const ownParams = standaloneDef ? parseParams(standaloneDef.params).items : [];
+  const top = analyseSheet(standaloneDef ?? sch, standaloneDef ? 'standalone' : 'top', defs, new Set([...globals, ...ownParams.map((q) => q.name.toLowerCase())]));
   const issues = top.issues;
+  if (standaloneDef) issues.push(...paramIssues(standaloneDef));
   const models = new Set(top.models);
 
-  // Every subcircuit reachable from the top sheet, checked and emitted once.
+  // Every subcircuit reachable from the main sheet, checked and emitted once.
   const order: Subckt[] = [];
   const visiting: string[] = [];
   const visit = (key: string) => {
@@ -258,27 +304,31 @@ export function compile(sch: Schematic, opts: CompileOptions = {}): Compiled {
     if (!def || order.includes(def)) return;
     if (visiting.includes(key)) { issues.push({ level: 'error', message: `Subcircuit ${def.name} contains itself (${[...visiting.slice(visiting.indexOf(key)), key].map((k) => defs.get(k)?.name ?? k).join(' → ')}): a subcircuit cannot be placed inside its own sheet` }); return; }
     visiting.push(key);
-    for (const next of usedBy(def.parts)) visit(next);
+    for (const next of usedBy(def.parts.filter((p) => !p.bench))) visit(next);
     visiting.pop();
     order.push(def);
   };
-  for (const key of usedBy(sch.parts)) visit(key);
+  if (standaloneDef) visiting.push(standaloneDef.name.toLowerCase()); // it is on the stack: placing itself inside itself is recursion
+  for (const key of usedBy(mainParts)) visit(key);
 
   const blocks: string[] = [];
   for (const def of order) {
-    const out = analyseSheet(def, true, defs);
-    for (const i of out.issues) issues.push({ level: i.level, message: `In subcircuit ${def.name}: ${i.message}` });
+    const out = analyseSheet(def, 'sub', defs, new Set([...globals, ...parseParams(def.params).items.map((q) => q.name.toLowerCase())]));
+    for (const i of [...out.issues, ...paramIssues(def)]) issues.push({ level: i.level, message: `In subcircuit ${def.name}: ${i.message}` });
     if (!subcktPorts(def).length) issues.push({ level: 'warning', message: `Subcircuit ${def.name} has no ports` });
     blocks.push(...subcktBlock(def, out));
     for (const m of out.models) models.add(m);
   }
 
-  const lines = [`* ${sch.title.replace(/\s+/g, ' ').trim() || 'untitled'}`, ...blocks, ...top.cards, ...models];
+  const title = standaloneDef ? `${standaloneDef.name} on its own` : sch.title;
+  // Run on its own, the sheet's parameter defaults have to exist at the top level.
+  const paramLines = ownParams.map((q) => `.param ${q.name}=${q.value}`);
+  const lines = [`* ${title.replace(/\s+/g, ' ').trim() || 'untitled'}`, ...paramLines, ...blocks, ...top.cards, ...models];
   const extra = sch.directives.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !/^\.end$/i.test(l));
   lines.push(...extra);
   // Per-device currents (I(R1) and friends). ngspice cannot save them in AC analysis.
   if (sch.analysis.kind !== 'ac') lines.push('.options savecurrents');
-  lines.push(analysisLine(sch.analysis, sch.parts, issues), '.end');
+  lines.push(analysisLine(sch.analysis, mainParts, issues), '.end');
 
   return {
     netlist: lines.join('\n') + '\n',

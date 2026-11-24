@@ -1,9 +1,10 @@
 // Document state: the schematic plus undo history, and the pure edits the UI makes.
 
-import { pointKey, route } from '../core/geometry';
+import { newId, pointKey, route } from '../core/geometry';
 import { onWire } from '../core/netlist';
 import { SUBCKT_NAME, SYMBOLS, nextRef, pinPositions, symbolFor } from '../core/symbols';
-import { syncInstances } from '../core/subckt';
+import { sheetOf, syncInstances, withSheet } from '../core/subckt';
+export { sheetOf, withSheet };
 import { emptySchematic, type Part, type PartKind, type Point, type Rot, type Schematic, type Subckt, type Wire } from '../core/types';
 
 export interface Doc { sch: Schematic; past: Schematic[]; future: Schematic[] }
@@ -28,18 +29,6 @@ export function normalizeAll(sch: Schematic): Schematic {
   const subckts = out.subckts.map((s) => { const n = normalizeWires({ ...out, parts: s.parts, wires: s.wires }); return n.wires === s.wires ? s : { ...s, wires: n.wires }; });
   if (subckts.some((s, i) => s !== out.subckts[i])) out = { ...out, subckts };
   return syncInstances(out);
-}
-
-/** The sheet being edited as an ordinary Schematic: the top sheet when `name` is null. */
-export function sheetOf(sch: Schematic, name: string | null): Schematic {
-  const def = name === null ? undefined : sch.subckts.find((s) => s.name === name);
-  return def ? { ...sch, title: def.name, parts: def.parts, wires: def.wires } : sch;
-}
-
-/** Store an edited sheet back: the whole schematic when `name` is null, else just that subcircuit's parts and wires. */
-export function withSheet(sch: Schematic, name: string | null, next: Schematic): Schematic {
-  if (name === null) return next;
-  return { ...sch, subckts: sch.subckts.map((s) => (s.name === name ? { ...s, parts: next.parts, wires: next.wires } : s)) };
 }
 
 /** Why `name` cannot be used for a new subcircuit, or null when it can. */
@@ -123,7 +112,7 @@ function mergeCollinear(sch: Schematic, wires: Wire[]): Wire[] {
   return wires;
 }
 
-export const uid = () => Math.random().toString(36).slice(2, 10);
+export const uid = newId;
 
 /** A fresh port name: in, then out, then p3, p4, … so new ports never collide. */
 export function nextPortName(parts: Part[]): string {
@@ -245,6 +234,8 @@ export function parseSchematic(text: string): Schematic {
     if (refOffset) part.refOffset = refOffset;
     if (valueOffset) part.valueOffset = valueOffset;
     if (p.kind === 'SUBCKT' && Array.isArray(p.ports)) part.ports = p.ports.map(String);
+    if (p.kind === 'SUBCKT' && typeof p.params === 'string' && p.params.trim()) part.params = p.params;
+    if (p.bench) part.bench = true;
     return part;
   };
   const parseWire = (w: Wire): Wire => ({ id: String(w.id || uid()), x1: int(w.x1), y1: int(w.y1), x2: int(w.x2), y2: int(w.y2) });
@@ -252,7 +243,8 @@ export function parseSchematic(text: string): Schematic {
   const wires = (Array.isArray(d.wires) ? d.wires : []).map(parseWire);
   const subckts = (Array.isArray(d.subckts) ? d.subckts : []).map((s): Subckt => {
     if (!s || !SUBCKT_NAME.test(String(s.name))) throw new Error(`Bad subcircuit name "${String(s?.name)}"`);
-    return { name: String(s.name), parts: (Array.isArray(s.parts) ? s.parts : []).map(parsePart), wires: (Array.isArray(s.wires) ? s.wires : []).map(parseWire) };
+    const params = typeof s.params === 'string' && s.params.trim() ? { params: s.params } : {};
+    return { name: String(s.name), ...params, parts: (Array.isArray(s.parts) ? s.parts : []).map(parsePart), wires: (Array.isArray(s.wires) ? s.wires : []).map(parseWire) };
   });
   const base = emptySchematic();
   const a = d.analysis;

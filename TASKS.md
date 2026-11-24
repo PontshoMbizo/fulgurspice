@@ -22,7 +22,8 @@
 - [x] **DONE** Rule check: loop of voltage sources / inductors (error), cut-set of current sources (error) — `src/core/rules.ts`
 - [x] **DONE** Rule check: node with no DC path to ground (warning: ngspice adds gmin and carries on)
 - [x] **DONE** Subcircuit parts: draw a sheet with Subcircuit port parts, place it as an `X` instance; compiles to `.subckt` / `.ends`
-- [ ] Subcircuits, follow-ups: rename a definition (instances follow); "make subcircuit from selection" (auto-create ports from the boundary nets); keep wires attached when a port is added or removed; `.param` pass-through to instances; simulate a subcircuit sheet on its own
+- [x] **DONE** Subcircuits, follow-ups: rename a definition (instances follow); make a subcircuit from the selection (nets crossing the boundary become ports, ground stays global, outside connectivity verified); wires follow pins when ports change; `params:` defaults and per-instance overrides; run a subcircuit sheet on its own with test-bench-only parts
+- [ ] Subcircuits, still open: choose which side each port is on; keep a symbol's pin order stable when ports are reordered; `.param` expressions that reference other params of the same definition
 
 ## Phase 3 — analyses and waveform viewer
 - [x] **DONE** `.tran`, `.ac`, `.dc`, `.op`; voltage and current probing from the schematic

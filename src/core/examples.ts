@@ -61,6 +61,38 @@ export const EXAMPLES: { name: string; build: () => Schematic }[] = [
     ], wires([10, 10, 10, 6], [10, 6, 18, 6], [18, 6, 18, 8], [18, 12, 18, 14], [10, 14, 10, 20], [18, 18, 18, 20], [10, 20, 18, 20])),
   },
   {
+    name: 'Subcircuit with parameters — two dividers',
+    build: () => {
+      // One divider drawn once: the top resistor is the parameter R (default 1k), the bottom is 1k.
+      const div: Subckt = {
+        name: 'DIV',
+        params: 'R=1k',
+        parts: [
+          { ...part('PORT', '', 6, 0, 'in'), mirror: true },
+          part('R', 'R1', 10, 0, '{R}', 90),
+          part('R', 'R2', 16, 4, '1k'),
+          part('GND', '', 16, 6, ''),
+          part('PORT', '', 20, 0, 'out'),
+        ],
+        wires: wires([6, 0, 8, 0], [12, 0, 20, 0], [16, 0, 16, 2]),
+      };
+      const inst = (ref: string, y: number, params?: string): Part => ({ ...part('SUBCKT', ref, 10, y, 'DIV'), ports: ['in', 'out'], ...(params ? { params } : {}) });
+      return doc('Two dividers from one subcircuit', { kind: 'op' }, [
+        part('V', 'V1', 0, 2, '10'),
+        part('GND', '', 0, 4, ''),
+        inst('X1', 0),            // default R = 1k: halves the input
+        inst('X2', 8, 'R=3k'),    // R = 3k: a quarter of the input
+        part('R', 'R1', 16, 2, '1G'), // negligible loads keep the output pins connected
+        part('GND', '', 16, 4, ''),
+        part('R', 'R2', 16, 10, '1G'),
+        part('GND', '', 16, 12, ''),
+        part('LABEL', '', 0, 0, 'in'),
+        part('LABEL', '', 13, 0, 'half'),
+        part('LABEL', '', 13, 8, 'quarter'),
+      ], wires([0, 0, 7, 0], [3, 0, 3, 8], [3, 8, 7, 8], [13, 0, 16, 0], [13, 8, 16, 8]), '', [div]);
+    },
+  },
+  {
     name: 'Two RC stages from one subcircuit — AC sweep',
     build: () => {
       // One RC section drawn once, placed twice. Its inner R1/C1 are local to it, so they

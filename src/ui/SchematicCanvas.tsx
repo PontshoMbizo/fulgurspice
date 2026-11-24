@@ -69,7 +69,7 @@ function PartView({ part, selected, error, ghost, open }: { part: Part; selected
   const cx = ((b.x0 + b.x1) / 2) * G, cy = ((b.y0 + b.y1) / 2) * G;
   const tall = b.y1 - b.y0 >= b.x1 - b.x0;
   const ro = part.refOffset ?? { x: 0, y: 0 }, vo = part.valueOffset ?? { x: 0, y: 0 };
-  const cls = `part${selected ? ' is-selected' : ''}${error ? ' has-error' : ''}${ghost ? ' is-ghost' : ''}`;
+  const cls = `part${part.bench ? ' is-bench' : ''}${selected ? ' is-selected' : ''}${error ? ' has-error' : ''}${ghost ? ' is-ghost' : ''}`;
   return (
     <g className={cls} data-id={ghost ? undefined : part.id} data-kind="part">
       <g transform={`translate(${part.x * G} ${part.y * G}) rotate(${part.rot}) scale(${part.mirror ? -G : G} ${G})`}>

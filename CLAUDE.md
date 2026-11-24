@@ -33,6 +33,11 @@ Simulink-style block simulator backed by Scilab) and deliberately shares its des
 ## Conventions
 - SPICE number rules, not SI: `m` = milli, `meg` = mega, case-insensitive. See `src/core/units.ts`.
 - ngspice lower-cases everything; node names from labels are lower-cased in `netName()`.
+- **Engine hazards (measured): ngspice-wasm never returns for a `{name}` that is not defined, or for a
+  parameter value written `4k7`.** There is no timeout inside the engine, so a tab freezes and a
+  grader would hang. `compile()` refuses undefined `{names}` (`exprNames`) and rewrites parameter
+  numbers through `spiceValue`; keep it that way. ngspice also silently ignores unknown instance
+  parameters, so those are checked in `compile()` too.
 - Vector names stay as ngspice reports them (`v(out)`, `i(@r1[i])`); `vectorLabel()` makes the
   display form (`V(out)`, `I(R1)`).
 - Visual language: grey desktop chrome (from fulgurlab), KiCad default colours on the sheet

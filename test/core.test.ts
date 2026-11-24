@@ -7,7 +7,9 @@ import { pinPositions, toWorld } from '../src/core/symbols';
 import { topologyFindings, type Device } from '../src/core/rules';
 import { vectorLabel } from '../src/sim/result';
 import { addPart, addSubckt, copyItems, moveItems, normalizeAll, normalizeWires, parseSchematic, pasteItems, removeSubckt, removeWireSpan, sheetOf, subcktNameProblem, withSheet } from '../src/ui/store';
-import { subcktPorts, syncInstances } from '../src/core/subckt';
+import { renameSubckt, subcktPorts, syncInstances } from '../src/core/subckt';
+import { makeSubckt } from '../src/core/extract';
+import { dotParamNames, exprNames, parseParams } from '../src/core/params';
 import { pinPositions as pinsOf, subcktSymbol } from '../src/core/symbols';
 import { withLabelOffset } from '../src/ui/SchematicCanvas';
 
@@ -235,6 +237,230 @@ describe('subcircuits', () => {
     const names: string[] = [];
     for (let i = 0; i < 4; i++) { const r = addPart(sheet, 'PORT', i * 6, 0, 0, false); sheet = r.sch; names.push(r.sch.parts[i].value); }
     expect(names).toEqual(['in', 'out', 'p3', 'p4']);
+  });
+});
+
+describe('subcircuit follow-ups', () => {
+  const rcs = () => EXAMPLES.find((e) => /Two RC stages/.test(e.name))!.build();
+  const divs = () => EXAMPLES.find((e) => /with parameters/.test(e.name))!.build();
+  const text = (c: ReturnType<typeof compile>) => c.issues.map((i) => i.message).join(' | ');
+
+  it('renames a definition and every instance of it, on every sheet', () => {
+    const s = rcs();
+    // a second subcircuit that itself uses RCSTAGE
+    const outer: Schematic = { ...s, subckts: [...s.subckts, { name: 'TWOSTAGE', parts: [{ ...P('SUBCKT', 'X1', 0, 0, 'RCSTAGE'), ports: ['in', 'out'] }], wires: [] }] };
+    const r = renameSubckt(outer, 'RCSTAGE', 'Lowpass');
+    expect(r.subckts.map((d) => d.name)).toEqual(['Lowpass', 'TWOSTAGE']);
+    expect(r.parts.filter((p) => p.kind === 'SUBCKT').map((p) => p.value)).toEqual(['Lowpass', 'Lowpass']);
+    expect(r.subckts[1].parts[0].value).toBe('Lowpass');
+    expect(compile(r).netlist).toContain('.subckt Lowpass in out');
+    expect(compile(r).netlist).toContain('X1 in mid Lowpass');
+    expect(compile(renameSubckt(rcs(), 'rcstage', 'Q')).issues).toEqual([]); // case-insensitive match
+  });
+
+  it('parses parameters, rewrites numbers the way ngspice reads them, and refuses what it cannot', () => {
+    expect(parseParams('R=4k7  C = 100n').items).toEqual([{ name: 'R', value: '4700' }, { name: 'C', value: '1e-7' }]);
+    expect(parseParams('G={2*R}').items).toEqual([{ name: 'G', value: '{2*R}' }]);
+    expect(parseParams('').items).toEqual([]);
+    expect(parseParams('R').error).toMatch(/NAME=value/);
+    expect(parseParams('R=abc').error).toMatch(/not a number/);
+    expect(parseParams('R=1k r=2k').error).toMatch(/twice/);
+    expect(parseParams('1R=2').error).toMatch(/NAME=value/);
+    expect(parseParams('R={a b}').error).toMatch(/not a number/); // no spaces in an expression
+  });
+  it('never lets a 4k7-style value reach ngspice (it hangs the engine)', () => {
+    const s = divs();
+    const edited: Schematic = { ...s, subckts: [{ ...s.subckts[0], params: 'R=4k7' }] };
+    const nl = compile(edited).netlist;
+    expect(nl).toContain('.subckt DIV in out params: R=4700');
+    expect(nl).not.toMatch(/4k7/i);
+    const inst = { ...edited, parts: edited.parts.map((p) => (p.ref === 'X2' ? { ...p, params: 'R=2k2' } : p)) };
+    expect(compile(inst).netlist).toContain('X2 in quarter DIV R=2200');
+  });
+  it('emits defaults on the definition and overrides on the instance', () => {
+    const c = compile(divs());
+    expect(c.issues).toEqual([]);
+    const lines = c.netlist.split('\n');
+    expect(lines).toContain('.subckt DIV in out params: R=1000');
+    expect(lines).toContain('X1 in half DIV');
+    expect(lines).toContain('X2 in quarter DIV R=3000');
+  });
+  it('catches an unknown parameter name (ngspice would ignore it) and a malformed list', () => {
+    const s = divs();
+    const typo: Schematic = { ...s, parts: s.parts.map((p) => (p.ref === 'X2' ? { ...p, params: 'Q=3k' } : p)) };
+    expect(text(compile(typo))).toMatch(/X2: DIV has no parameter "Q" \(it has R\)/);
+    expect(compile(typo).ok).toBe(false);
+    const none: Schematic = { ...rcs(), parts: rcs().parts.map((p) => (p.ref === 'X1' ? { ...p, params: 'R=1k' } : p)) };
+    expect(text(compile(none))).toMatch(/RCSTAGE has no parameter "R" \(it has none\)/);
+    const bad: Schematic = { ...s, subckts: [{ ...s.subckts[0], params: 'R=' }] };
+    expect(text(compile(bad))).toMatch(/In subcircuit DIV: Parameters: "R=" is not written NAME=value/);
+    expect(text(compile(bad, { sheet: 'DIV' }))).toMatch(/Parameters: /);
+  });
+  it('reads the names an expression uses, ignoring numbers, functions and pi', () => {
+    expect(exprNames('{R}')).toEqual(['r']);
+    expect(exprNames('{2*R + Cload}')).toEqual(['r', 'cload']);
+    expect(exprNames('{sqrt(Q)*1e3 + pi}')).toEqual(['q']);
+    expect(exprNames('{1e-3*x}')).toEqual(['x']);
+    expect(exprNames('4700')).toEqual([]);
+    expect(dotParamNames('.model D1 D\n.param A=1k  B = {2*A}\n.PARAM c=3')).toEqual(['a', 'b', 'c']);
+  });
+  it('refuses an undefined {name} (ngspice hangs on it), but accepts .param and subcircuit parameters', () => {
+    const top = (value: string, directives = ''): Schematic => ({ ...sch([P('V', 'V1', 0, 2, '5'), P('R', 'R1', 4, 2, value), P('GND', '', 0, 4, ''), P('GND', '', 4, 4, '')], [[0, 0, 4, 0]]), directives });
+    expect(compile(top('{Q}')).issues.map((i) => i.message).join('|')).toMatch(/R1: \{Q\} uses q, which is not defined/);
+    expect(compile(top('{Q}')).ok).toBe(false);
+    expect(compile(top('{Q}', '.param Q=2k')).issues).toEqual([]);
+    expect(compile(top('{2*Q}', '.param Q=2k')).ok).toBe(true);
+    // inside a subcircuit, its own parameters count; another definition's do not
+    const d = divs();
+    expect(compile(d).issues).toEqual([]);
+    const noParam: Schematic = { ...d, subckts: [{ ...d.subckts[0], params: undefined }] };
+    expect(text(compile(noParam))).toMatch(/In subcircuit DIV: R1: \{R\} uses r/);
+    expect(text(compile(noParam, { sheet: 'DIV' }))).toMatch(/R1: \{R\} uses r/);
+    // an instance override may use a global .param
+    const useGlobal: Schematic = { ...d, directives: '.param K=2k', parts: d.parts.map((p) => (p.ref === 'X2' ? { ...p, params: 'R={K}' } : p)) };
+    expect(compile(useGlobal).issues).toEqual([]);
+    const undefinedGlobal: Schematic = { ...d, parts: d.parts.map((p) => (p.ref === 'X2' ? { ...p, params: 'R={K}' } : p)) };
+    expect(text(compile(undefinedGlobal))).toMatch(/X2: parameters use k, which is not defined here/);
+  });
+  it('a subcircuit run on its own defines its parameter defaults at the top level', () => {
+    const d = divs();
+    const def = d.subckts[0];
+    const bench = [P('V', 'V1', 3, 2, '10'), P('GND', '', 3, 4, '')].map((p) => ({ ...p, bench: true }));
+    const wired: Schematic = { ...d, subckts: [{ ...def, parts: [...def.parts, ...bench], wires: [...def.wires, { id: 'bw', x1: 3, y1: 0, x2: 6, y2: 0 }] }] };
+    const c = compile(wired, { sheet: 'DIV', standalone: true });
+    expect(c.issues).toEqual([]);
+    expect(c.netlist.split('\n').slice(0, 3)).toEqual(['* DIV on its own', '.param R=1000', 'R1 out in {R}']);
+  });
+  it('keeps params and the test-bench flag through save and load', () => {
+    const s = divs();
+    const flagged: Schematic = { ...s, subckts: [{ ...s.subckts[0], parts: s.subckts[0].parts.map((p, i) => (i === 0 ? { ...p, bench: true } : p)) }] };
+    const back = parseSchematic(JSON.stringify(flagged));
+    expect(back.subckts[0].params).toBe('R=1k');
+    expect(back.parts.find((p) => p.ref === 'X2')!.params).toBe('R=3k');
+    expect(back.subckts[0].parts[0].bench).toBe(true);
+    expect(back.subckts[0].parts[1].bench).toBeUndefined();
+  });
+
+  it('moves wires with the pins that survive when ports are added, removed or renamed', () => {
+    const s = rcs();
+    const x1 = s.parts.find((p) => p.ref === 'X1')!; // pins in (7,0) and out (13,0)
+    const withPort = (ports: string[]): Schematic => ({ ...s, subckts: [{ ...s.subckts[0], parts: ports.map((name, i) => P('PORT', '', 6 + i * 3, 20, name)) }] });
+    const endpoints = (sc: Schematic) => sc.wires.flatMap((w) => [`${w.x1},${w.y1}`, `${w.x2},${w.y2}`]);
+    const pinOf = (sc: Schematic, name: string) => pinsOf(sc.parts.find((p) => p.ref === 'X1')!).find((q) => q.name === name)!;
+
+    // a third port in front shifts the layout: in/out keep their wires
+    const grown = normalizeAll(withPort(['gnd2', 'in', 'out']));
+    const inPin = pinOf(grown, 'in'), outPin = pinOf(grown, 'out');
+    expect(`${inPin.x},${inPin.y}`).not.toBe('7,0'); // it really moved
+    expect(endpoints(grown)).toContain(`${inPin.x},${inPin.y}`);
+    expect(endpoints(grown)).toContain(`${outPin.x},${outPin.y}`);
+    // every wire is still straight, and V1 is still on the same net as the instance's in pin
+    for (const w of grown.wires) expect(w.x1 === w.x2 || w.y1 === w.y2).toBe(true);
+    const cg = compile(grown), v1 = grown.parts.find((p) => p.ref === 'V1')!, x1g = grown.parts.find((p) => p.ref === 'X1')!;
+    expect(cg.pinNode.get(`${x1g.id}:in`)).toBe(cg.pinNode.get(`${v1.id}:+`));
+
+    // a rename (same count) keeps the wire on that pin
+    const renamed = normalizeAll(withPort(['input', 'out']));
+    expect(endpoints(renamed)).toContain('7,0');
+    expect(pinOf(renamed, 'input')).toMatchObject({ x: 7, y: 0 });
+    // removing a port drops its wire attachment but leaves the other
+    const shrunk = normalizeAll(withPort(['in']));
+    expect(endpoints(shrunk)).toContain('7,0');
+    expect(x1.ports).toEqual(['in', 'out']);
+  });
+
+  it('leaves a test bench out of the definition, but shows it on the sheet and runs it standalone', () => {
+    const s = rcs();
+    const def = s.subckts[0];
+    const bench = [P('V', 'V1', 3, 2, 'AC 1'), P('GND', '', 3, 4, '')].map((p) => ({ ...p, bench: true }));
+    const wired: Schematic = { ...s, subckts: [{ ...def, parts: [...def.parts, ...bench], wires: [...def.wires, { id: 'bw', x1: 3, y1: 0, x2: 6, y2: 0 }] }] };
+    // emitted definition: unchanged, no source in it
+    expect(compile(wired).netlist).toBe(compile(s).netlist);
+    expect(compile(wired, { sheet: 'RCSTAGE' }).netlist).toBe('.subckt RCSTAGE in out\nR1 out in 1000\nC1 out 0 1e-7\n.ends RCSTAGE\n');
+    // the sheet view checks the bench too, and has no ground complaint
+    expect(compile(wired, { sheet: 'RCSTAGE' }).issues).toEqual([]);
+    // standalone: a runnable circuit with the source in it and the ports as plain nets
+    const alone = compile(wired, { sheet: 'RCSTAGE', standalone: true });
+    expect(alone.issues).toEqual([]);
+    const lines = alone.netlist.split('\n');
+    expect(lines[0]).toBe('* RCSTAGE on its own');
+    expect(lines).toContain('V1 in 0 AC 1');
+    expect(lines).toContain('R1 out in 1000');
+    expect(lines.some((l) => l.startsWith('.subckt'))).toBe(false);
+    expect(lines.some((l) => l.startsWith('X'))).toBe(false);
+    // without a bench its ports lead nowhere: standalone, that is a dangling pin
+    expect(compile(s, { sheet: 'RCSTAGE', standalone: true }).issues.map((i) => i.message).join('|')).toMatch(/R1 pin 2 is not connected/);
+    expect(compile(s, { sheet: 'nope', standalone: true }).ok).toBe(false);
+  });
+});
+
+describe('make subcircuit from selection', () => {
+  // The RC low-pass with a 1k load on its output, outside the part we extract (R1 + C1).
+  const flat = (): Schematic => {
+    const base = EXAMPLES.find((e) => /AC sweep/.test(e.name) && /RC low-pass/.test(e.name))!.build();
+    const extra = [{ ...P('R', 'R2', 28, 12, '1k') }];
+    const w = [[22, 8, 28, 8], [28, 8, 28, 10], [28, 14, 28, 16], [22, 16, 28, 16]].map(([x1, y1, x2, y2], i) => ({ id: `ld${i}`, x1, y1, x2, y2 }));
+    return { ...base, parts: [...base.parts, ...extra], wires: [...base.wires, ...w] };
+  };
+  const wid = (s: Schematic, ...c: number[][]) => s.wires.filter((w) => c.some(([a, b, x, y]) => w.x1 === a && w.y1 === b && w.x2 === x && w.y2 === y)).map((w) => w.id);
+  const sel = (s: Schematic) => new Set([...s.parts.filter((p) => p.ref === 'R1' || p.ref === 'C1').map((p) => p.id), ...wid(s, [10, 8, 14, 8], [18, 8, 22, 8], [22, 8, 22, 10], [22, 14, 22, 16], [10, 16, 22, 16])]);
+
+  it('turns crossing nets into ports in left-to-right order, keeps ground global, and moves the selection', () => {
+    const s = flat();
+    const r = makeSubckt(s, null, sel(s), 'LOWPASS');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const def = r.sch.subckts[0];
+    expect(def.name).toBe('LOWPASS');
+    expect(subcktPorts(def)).toEqual(['in', 'out']);
+    expect(def.parts.filter((p) => p.kind === 'R' || p.kind === 'C').map((p) => p.ref).sort()).toEqual(['C1', 'R1']);
+    expect(def.parts.some((p) => p.kind === 'GND')).toBe(true); // ground stays a ground, not a port
+    expect(r.sch.parts.some((p) => p.ref === 'R1' || p.ref === 'C1')).toBe(false);
+    const inst = r.sch.parts.find((p) => p.id === r.instanceId)!;
+    expect(inst).toMatchObject({ kind: 'SUBCKT', ref: 'X1', value: 'LOWPASS', ports: ['in', 'out'] });
+    expect(r.sch.parts.some((p) => p.kind === 'GND')).toBe(true); // the outside kept a ground
+    expect(compile(r.sch).issues).toEqual([]);
+  });
+  it('names auto-named ports p1, p2 and never reuses a name that is taken', () => {
+    // V1 -> R1 -> R2 -> GND, no labels at all: select R1 and R2.
+    const parts = [P('V', 'V1', 0, 2, '5'), P('R', 'R1', 6, 0, '1k', 90), P('R', 'R2', 12, 2, '1k'), P('GND', '', 0, 4, ''), P('GND', '', 12, 6, '')];
+    const s = sch(parts, [[0, 0, 4, 0], [8, 0, 12, 0], [12, 0, 12, 2], [0, 4, 0, 4]]);
+    const r = makeSubckt(s, null, new Set([parts[1].id, parts[2].id, ...s.wires.filter((w) => w.x1 === 8 || w.y1 === 0 && w.x2 === 12).map((w) => w.id)]), 'PAIR');
+    expect(r.ok, r.ok ? '' : r.error).toBe(true);
+    if (r.ok) expect(r.ports).toEqual(['p1']);
+  });
+  it('joins a net that crosses only by label with a label at the instance pin', () => {
+    // Two islands that meet only through the label "link": R1 (selected) and R2 (not).
+    const parts = [P('V', 'V1', 0, 2, '5'), P('R', 'R1', 6, 0, '1k', 90), P('R', 'R2', 20, 2, '1k'), P('GND', '', 0, 4, ''), P('GND', '', 20, 4, ''), P('LABEL', '', 12, 0, 'link'), P('LABEL', '', 20, 0, 'link')];
+    const s = sch(parts, [[0, 0, 4, 0], [8, 0, 12, 0]]);
+    const r = makeSubckt(s, null, new Set([parts[1].id, parts[5].id, ...s.wires.filter((w) => w.x1 === 8).map((w) => w.id)]), 'HALF');
+    expect(r.ok, r.ok ? '' : r.error).toBe(true);
+    if (!r.ok) return;
+    expect(r.ports).toContain('link');
+    expect(r.sch.parts.some((p) => p.kind === 'LABEL' && p.value === 'link' && p.x !== 12)).toBe(true);
+    expect(compile(r.sch).issues).toEqual([]);
+  });
+  it('refuses an empty or wire-only selection, a selection with ports, and one that touches nothing', () => {
+    const s = flat();
+    expect(makeSubckt(s, null, new Set(), 'A')).toMatchObject({ ok: false, error: expect.stringMatching(/Select the parts/) });
+    expect(makeSubckt(s, null, new Set(wid(s, [10, 8, 14, 8])), 'A')).toMatchObject({ ok: false, error: expect.stringMatching(/real part/) });
+    const ex = EXAMPLES.find((e) => /Two RC stages/.test(e.name))!.build();
+    const ports = new Set(ex.subckts[0].parts.map((p) => p.id));
+    expect(makeSubckt(ex, 'RCSTAGE', ports, 'A')).toMatchObject({ ok: false, error: expect.stringMatching(/ports belong/) });
+    const whole = new Set([...s.parts.map((p) => p.id), ...s.wires.map((w) => w.id)]);
+    expect(makeSubckt(s, null, whole, 'A')).toMatchObject({ ok: false, error: expect.stringMatching(/not connected to the rest/) });
+  });
+  it('works inside a subcircuit sheet too, and leaves the top sheet alone', () => {
+    const ex = EXAMPLES.find((e) => /Two RC stages/.test(e.name))!.build();
+    const inner = ex.subckts[0];
+    const c1 = inner.parts.find((p) => p.ref === 'C1')!, gnd = inner.parts.find((p) => p.kind === 'GND')!;
+    const r = makeSubckt(ex, 'RCSTAGE', new Set([c1.id, gnd.id, ...inner.wires.filter((w) => w.x1 === 16 && w.y1 === 0).map((w) => w.id)]), 'CAP');
+    expect(r.ok, r.ok ? '' : r.error).toBe(true);
+    if (!r.ok) return;
+    expect(r.sch.parts).toBe(ex.parts);
+    expect(r.sch.subckts.map((d) => d.name)).toEqual(['RCSTAGE', 'CAP']);
+    expect(r.sch.subckts[0].parts.some((p) => p.kind === 'SUBCKT' && p.value === 'CAP')).toBe(true);
+    expect(compile(r.sch).issues).toEqual([]);
   });
 });
 

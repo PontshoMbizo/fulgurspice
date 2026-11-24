@@ -190,6 +190,10 @@ html, body, #root { height: 100%; margin: 0; }
 .palette li.palette-subckt .palette-mini:hover { color: #000; }
 .palette-new span { color: var(--ink-3); padding-left: 38px; }
 
+.part.is-bench { opacity: 0.6; }
+.part.is-bench .sym { stroke-dasharray: 3 2; }
+.check { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+
 /* ------------------------------------------------------------------ marquee */
 .marquee { fill: rgb(0 120 215 / 0.08); stroke: #0078d7; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
 .marquee.is-crossing { fill: rgb(0 150 70 / 0.08); stroke: #009646; stroke-dasharray: 4 3; }

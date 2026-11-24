@@ -4,6 +4,9 @@
 
 import type { Point } from './types';
 
+/** A fresh element id. Not cryptographic: ids only need to be unique within one document. */
+export const newId = () => Math.random().toString(36).slice(2, 10);
+
 export const pointKey = (x: number, y: number) => `${x},${y}`;
 
 /** One bend: along x first, then y. Degenerate (zero-length) segments are dropped. */

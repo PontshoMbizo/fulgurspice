@@ -3,6 +3,7 @@
 // netlister and the palette all read from this table.
 
 import type { Part, PartKind, Point } from './types';
+import { formatParams, parseParams } from './params';
 import { spiceValue } from './units';
 
 export interface Pin { name: string; x: number; y: number }
@@ -92,7 +93,7 @@ export const SYMBOLS: Record<PartKind, SymbolDef> = {
     kind: 'SUBCKT', label: 'Subcircuit', group: 'Subcircuits', prefix: 'X', pins: [],
     path: '', box: [-2, -2, 2, 2],
     defaultValue: '', valueLabel: 'Subcircuit', valueHint: 'Name of a subcircuit defined in this schematic',
-    card: (p, n) => `X${p.ref.slice(1)} ${n.join(' ')} ${p.value.trim().replace(/\s+/g, '_')}`,
+    card: (p, n) => [`X${p.ref.slice(1)}`, ...n, p.value.trim().replace(/\s+/g, '_'), formatParams(parseParams(p.params).items)].filter(Boolean).join(' '),
   },
   D: {
     kind: 'D', label: 'Diode', group: 'Semiconductors', prefix: 'D',

@@ -29,6 +29,11 @@ export interface Part {
   /** SUBCKT only: the subcircuit's port names, in pin order, as of the last sync. Pins are
    * laid out from this list, so geometry needs nothing but the part. */
   ports?: string[];
+  /** SUBCKT only: parameter overrides, "R=2k C=47n". */
+  params?: string;
+  /** Inside a subcircuit sheet only: part of the test bench, drawn and simulated when the
+   * sheet is run on its own but left out of the definition and every instance. */
+  bench?: boolean;
 }
 
 export interface Wire {
@@ -49,6 +54,8 @@ export type Analysis =
  * in the order they appear in `parts`. Compiles to `.subckt NAME ... .ends`. */
 export interface Subckt {
   name: string;
+  /** Parameters and their defaults, "R=1k C=100n". Use them in values as {R}. */
+  params?: string;
   parts: Part[];
   wires: Wire[];
 }

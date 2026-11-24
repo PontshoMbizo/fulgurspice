@@ -2,6 +2,8 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Simulation } from 'eecircuit-engine';
 import { compile } from '../src/core/netlist';
+import type { Part, Schematic } from '../src/core/types';
+import { makeSubckt } from '../src/core/extract';
 import { EXAMPLES } from '../src/core/examples';
 import { MODELS } from '../src/core/symbols';
 import type { Analysis } from '../src/core/types';
@@ -66,6 +68,63 @@ describe('ngspice end to end', () => {
     const k = r.x!.re.findIndex((f) => f > 1500);
     expect(Math.hypot(mid.re[k], mid.im![k])).toBeGreaterThan(Math.hypot(out.re[k], out.im![k]));
     expect(Math.hypot(mid.re[k], mid.im![k])).toBeLessThan(1);
+  });
+  it('subcircuit parameters: the default and an override each land where Ohm says', async () => {
+    const r = await runExample(/with parameters/);
+    expect(r.ok).toBe(true);
+    expect(r.messages).toEqual([]);
+    expect(vec(r, 'v(half)').re[0]).toBeCloseTo(5, 3);     // 1k over 1k
+    expect(vec(r, 'v(quarter)').re[0]).toBeCloseTo(2.5, 3); // R=3k: 1k over 4k
+  });
+  it('a subcircuit sheet run on its own, with a test bench, matches 1/(1+sτ)', async () => {
+    const base = EXAMPLES.find((e) => /Two RC stages/.test(e.name))!.build();
+    const def = base.subckts[0];
+    const mk = (kind: Part['kind'], x: number, y: number, value: string): Part => ({ id: `b${kind}${x}`, kind, ref: kind === 'V' ? 'V1' : '', x, y, rot: 0, mirror: false, value, bench: true });
+    const s: Schematic = { ...base, subckts: [{ ...def, parts: [...def.parts, mk('V', 3, 2, 'AC 1'), mk('GND', 3, 4, '')], wires: [...def.wires, { id: 'bw', x1: 3, y1: 0, x2: 6, y2: 0 }] }] };
+    const c = compile(s, { sheet: 'RCSTAGE', standalone: true });
+    expect(c.ok, c.issues.map((i) => i.message).join('|')).toBe(true);
+    const r = await runNetlist(c.netlist, 'ac');
+    expect(r.ok).toBe(true);
+    const out = vec(r, 'v(out)');
+    const tau = 1e3 * 100e-9;
+    r.x!.re.forEach((f, i) => expect(Math.hypot(out.re[i], out.im![i]), `|H| at ${f} Hz`).toBeCloseTo(1 / Math.hypot(1, 2 * Math.PI * f * tau), 3));
+  });
+  it('making a subcircuit from a selection changes nothing electrically: same AC response, to the last digit', async () => {
+    const base = EXAMPLES.find((e) => /AC sweep/.test(e.name) && /RC low-pass/.test(e.name))!.build();
+    // a 1k load on the output, outside the part we extract (R1 + C1), so the output net stays connected
+    const load: Part = { id: 'ld', kind: 'R', ref: 'R2', x: 28, y: 12, rot: 0, mirror: false, value: '1k' };
+    const lw = [[22, 8, 28, 8], [28, 8, 28, 10], [28, 14, 28, 16], [22, 16, 28, 16]].map(([x1, y1, x2, y2], i) => ({ id: `ld${i}`, x1, y1, x2, y2 }));
+    const flat: Schematic = { ...base, parts: [...base.parts, load], wires: [...base.wires, ...lw] };
+    const pick = (...coords: number[][]) => flat.wires.filter((w) => coords.some(([a, b, c, d]) => w.x1 === a && w.y1 === b && w.x2 === c && w.y2 === d)).map((w) => w.id);
+    const ids = new Set([
+      ...flat.parts.filter((p) => p.ref === 'R1' || p.ref === 'C1').map((p) => p.id),
+      ...pick([10, 8, 14, 8], [18, 8, 22, 8], [22, 8, 22, 10], [22, 14, 22, 16], [10, 16, 22, 16]),
+    ]);
+    const made = makeSubckt(flat, null, ids, 'LOWPASS');
+    expect(made.ok, made.ok ? '' : made.error).toBe(true);
+    if (!made.ok) return;
+    expect(made.ports).toEqual(['in', 'out']);
+    const c = compile(made.sch);
+    expect(c.ok, c.issues.map((i) => i.message).join('|')).toBe(true);
+    expect(c.netlist).toContain('.subckt LOWPASS in out');
+    expect(c.netlist).toMatch(/\nX1 in out LOWPASS\n/);
+    const before = await runNetlist(compile(flat).netlist, 'ac');
+    const after = await runNetlist(c.netlist, 'ac');
+    expect(after.ok).toBe(true);
+    const a = vec(before, 'v(out)'), b = vec(after, 'v(out)');
+    expect(b.re.length).toBe(a.re.length);
+    a.re.forEach((_, i) => { expect(b.re[i]).toBeCloseTo(a.re[i], 9); expect(b.im![i]).toBeCloseTo(a.im![i], 9); });
+  });
+  it('a parameterised subcircuit run on its own uses its defaults (and does not hang on {R})', async () => {
+    const d = EXAMPLES.find((e) => /with parameters/.test(e.name))!.build();
+    const def = d.subckts[0];
+    const mk = (kind: Part['kind'], x: number, y: number, value: string): Part => ({ id: `b${kind}${x}`, kind, ref: kind === 'V' ? 'V1' : '', x, y, rot: 0, mirror: false, value, bench: true });
+    const s: Schematic = { ...d, subckts: [{ ...def, parts: [...def.parts, mk('V', 3, 2, '10'), mk('GND', 3, 4, '')], wires: [...def.wires, { id: 'bw', x1: 3, y1: 0, x2: 6, y2: 0 }] }] };
+    const c = compile(s, { sheet: 'DIV', standalone: true });
+    expect(c.ok, c.issues.map((i) => i.message).join('|')).toBe(true);
+    const r = await runNetlist(c.netlist, 'op');
+    expect(r.ok).toBe(true);
+    expect(vec(r, 'v(out)').re[0]).toBeCloseTo(5, 6); // R = 1k default, over 1k
   });
   it('half-wave rectifier: output peaks one diode drop below 5 V and never goes negative', async () => {
     const r = await runExample(/rectifier/);

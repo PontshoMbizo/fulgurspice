@@ -14,7 +14,9 @@ import { QuickAdd } from './QuickAdd';
 import { SchematicCanvas, type Placing, type ProbeTarget, type Tool } from './SchematicCanvas';
 import { addSubckt, copyItems, deleteItems, docReducer, loadSaved, parseSchematic, pasteItems, patchParts, removeSubckt, removeWireSpan, rotated, saveLocal, sheetOf, subcktNameProblem, type Clipboard, type Doc } from './store';
 import { NamePrompt } from './NamePrompt';
-import { subcktPorts } from '../core/subckt';
+import { makeSubckt } from '../core/extract';
+import { renameSubckt, subcktPorts } from '../core/subckt';
+import { SUBCKT_NAME } from '../core/symbols';
 import { WaveformViewer, traceColor } from './WaveformViewer';
 
 const ANALYSIS_NAME = { tran: 'Transient', ac: 'AC sweep', dc: 'DC sweep', op: 'Operating point' } as const;
@@ -46,7 +48,11 @@ export function App() {
   /** The sheet on screen, as an ordinary schematic: every edit below works on this. */
   const sheet = useMemo(() => sheetOf(sch, editing), [sch, editing]);
   const view = useMemo(() => (editing === null ? compiled : compile(sch, { sheet: editing })), [sch, editing, compiled]);
-  const [namingSubckt, setNamingSubckt] = useState(false);
+  // The name prompt serves two jobs: a new empty subcircuit, or one made from the selection.
+  const [naming, setNaming] = useState<null | 'new' | 'extract'>(null);
+  // A subcircuit sheet with test-bench parts can be run on its own; `resultOf` says which sheet a result is for.
+  const bench = useMemo(() => (editing !== null && sheet.parts.some((p) => p.bench) ? compile(sch, { sheet: editing, standalone: true }) : null), [sch, editing, sheet]);
+  const [resultOf, setResultOf] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const selection = useMemo(() => new Set(selected), [selected]);
   const [tool, setTool] = useState<Tool>('select');
@@ -77,27 +83,30 @@ export function App() {
 
   const load = (next: Schematic, note: string) => {
     dispatch({ type: 'load', sch: next });
-    setEdit(null); setSelected([]); setResult(null); setTraces([]); setTool('select'); setPlacing(null);
+    setEdit(null); setSelected([]); setResult(null); setResultOf(null); setTraces([]); setTool('select'); setPlacing(null);
     setFitToken((t) => t + 1);
     say(note);
   };
 
-  const run = useCallback(async () => {
+  const run = useCallback(async (whole = false) => {
     if (busy) return;
-    if (!compiled.ok) { say(compiled.issues.find((i) => i.level === 'error')!.message, true); return; }
+    // On a subcircuit sheet with a test bench, Run simulates that sheet on its own.
+    const alone = !whole && bench !== null && editing !== null;
+    const target = alone ? bench : compiled;
+    if (!target.ok) { say(target.issues.find((i) => i.level === 'error')!.message, true); return; }
     setBusy(true);
     say(client.state === 'ready' ? 'Simulating…' : 'Loading ngspice (about 20 MB, first run only)…');
     try {
-      const r = await client.run(compiled.netlist, sch.analysis.kind);
-      setResult(r); setTab('wave'); setWaveOpen(true);
+      const r = await client.run(target.netlist, sch.analysis.kind);
+      setResult(r); setResultOf(alone ? editing : null); setTab('wave'); setWaveOpen(true);
       if (!r.ok) { say(explain(r.messages[0]) ?? r.messages[0], true); return; }
       setTraces((old) => {
         const keep = old.filter((name) => r.vectors.some((v) => v.name === name));
         if (keep.length) return keep;
-        const labelled = [...new Set(sch.parts.filter((p) => p.kind === 'LABEL').map((p) => `v(${netName(p.value)})`))].filter((name) => r.vectors.some((v) => v.name === name));
+        const labelled = [...new Set((alone ? sheet : sch).parts.filter((p) => p.kind === 'LABEL' || p.kind === 'PORT').map((p) => `v(${netName(p.value)})`))].filter((name) => r.vectors.some((v) => v.name === name));
         return (labelled.length ? labelled : r.vectors.filter((v) => v.unit === 'V').map((v) => v.name)).slice(0, 4);
       });
-      const summary = `${ANALYSIS_NAME[r.kind]}: ${r.points.toLocaleString()} point${r.points === 1 ? '' : 's'} in ${r.ms < 10 ? r.ms.toFixed(1) : Math.round(r.ms)} ms`;
+      const summary = `${alone ? `${editing} on its own — ` : ''}${ANALYSIS_NAME[r.kind]}: ${r.points.toLocaleString()} point${r.points === 1 ? '' : 's'} in ${r.ms < 10 ? r.ms.toFixed(1) : Math.round(r.ms)} ms`;
       // ngspice often limps through a broken circuit; do not let a plot hide that.
       if (r.messages.length) say(`${summary}, with warnings. ${explain(r.messages[0]) ?? r.messages[0]}`, true);
       else say(summary);
@@ -106,7 +115,7 @@ export function App() {
     } finally {
       setBusy(false);
     }
-  }, [busy, client, compiled, sch]);
+  }, [busy, client, compiled, sch, sheet, bench, editing]);
 
   const stop = () => client.cancel();
   const showWave = () => { setWaveOpen(true); setTab('wave'); };
@@ -114,8 +123,8 @@ export function App() {
 
   const toggleTrace = (name: string) => setTraces((t) => (t.includes(name) ? t.filter((x) => x !== name) : [...t, name]));
   const onProbe = (target: ProbeTarget) => {
-    if (editing !== null) { say('Probe on the top sheet: nets inside a subcircuit are local to it.'); return; }
     if (!result?.ok) { say('Run the simulation first, then probe.', true); return; }
+    if (resultOf !== editing) { say(editing !== null ? 'The current result is for another sheet. Add test-bench parts and Run to simulate this subcircuit on its own.' : 'The current result is for a subcircuit on its own. Run the whole circuit, then probe.', true); return; }
     if (result.kind === 'op') { say('An operating point has nothing to plot: read the values in the table below.'); return; }
     if ('node' in target) {
       if (target.node === '0') { say('That net is ground: 0 V by definition.'); return; }
@@ -138,7 +147,7 @@ export function App() {
   const closeSubckt = () => { setEdit(null); setSelected([]); setTool('select'); setPlacing(null); setFitToken((t) => t + 1); say('Back on the top sheet'); };
   const createSubckt = (name: string) => {
     commit(addSubckt(sch, name), null);
-    setNamingSubckt(false); setEdit(name); setSelected([]); setTool('select'); setPlacing(null); setFitToken((t) => t + 1);
+    setNaming(null); setEdit(name); setSelected([]); setTool('select'); setPlacing(null); setFitToken((t) => t + 1);
     say(`New subcircuit ${name}: draw its inside and add Subcircuit port parts for its pins`);
   };
   const pickSubckt = (name: string) => {
@@ -151,6 +160,37 @@ export function App() {
     const uses = [{ parts: sch.parts }, ...sch.subckts].reduce((n, sh) => n + sh.parts.filter((p) => p.kind === 'SUBCKT' && p.value.trim().toLowerCase() === name.toLowerCase()).length, 0);
     commit(removeSubckt(sch, name), null);
     say(uses ? `Deleted subcircuit ${name}. ${uses} instance${uses === 1 ? '' : 's'} of it now ${uses === 1 ? 'has' : 'have'} no definition (Undo brings it back)` : `Deleted subcircuit ${name}`, uses > 0);
+  };
+
+  const onRoot = (patch: Partial<Schematic>) => commit({ ...sch, ...patch }, null);
+  const renameOpen = (to: string) => {
+    if (editing === null) return;
+    const name = to.trim();
+    if (name === editing) return;
+    const caseOnly = name.toLowerCase() === editing.toLowerCase();
+    const problem = caseOnly ? (SUBCKT_NAME.test(name) ? null : 'Use letters, digits and underscores, not starting with a digit') : subcktNameProblem(sch, name);
+    if (problem) { say(`Cannot rename: ${problem}`, true); return; }
+    commit(renameSubckt(sch, editing, name), null);
+    setEdit(name);
+    say(`Renamed ${editing} to ${name}; every instance follows`);
+  };
+  const setSubcktParams = (params: string) => {
+    if (editing === null) return;
+    commit({ ...sch, subckts: sch.subckts.map((d) => (d.name === editing ? { ...d, params: params.trim() || undefined } : d)) }, null);
+  };
+  // Check the selection before asking for a name, so a bad one fails at once with the reason.
+  const askMakeSubckt = () => {
+    const dry = makeSubckt(sch, editing, selection, 'TMP_CHECK');
+    if (!dry.ok) { say(dry.error, true); return; }
+    setNaming('extract');
+  };
+  const makeFromSelection = (name: string) => {
+    const made = makeSubckt(sch, editing, selection, name);
+    setNaming(null);
+    if (!made.ok) { say(made.error, true); return; }
+    commit(made.sch, null);
+    setSelected([made.instanceId]); setTool('select'); setPlacing(null);
+    say(`Made subcircuit ${name} (ports: ${made.ports.length ? made.ports.join(', ') : 'none: ground only'}). Double-click the new part to open it`);
   };
 
   const pick = (kind: Part['kind']) => { setPlacing({ kind, rot: 0, mirror: false }); setTool('place'); setSelected([]); };
@@ -291,11 +331,13 @@ export function App() {
             { label: 'Net label', run: () => pick('LABEL') },
             { separator: true },
             { label: 'Subcircuit port', disabled: editing === null, run: () => pick('PORT') },
-            { label: 'New subcircuit…', run: () => setNamingSubckt(true) },
+            { label: 'New subcircuit…', run: () => setNaming('new') },
+            { label: 'Make subcircuit from selection…', disabled: !selected.length, run: askMakeSubckt },
             { label: 'Top sheet', disabled: editing === null, run: closeSubckt },
           ] },
           { title: 'Simulate', items: [
-            { label: 'Run', shortcut: 'F5', disabled: busy, run: () => void run() },
+            { label: editing !== null && bench ? `Run ${editing} on its own` : 'Run', shortcut: 'F5', disabled: busy, run: () => void run() },
+            { label: 'Run whole circuit', disabled: busy || editing === null || bench === null, run: () => void run(true) },
             { label: 'Stop', disabled: !busy, run: stop },
             { separator: true },
             { label: 'Probe', shortcut: 'P', run: () => { setTool('probe'); setPlacing(null); } },
@@ -338,14 +380,14 @@ export function App() {
       <div className="workspace">
         <Palette
           active={tool === 'place' ? placing?.kind ?? null : null} activeSubckt={tool === 'place' && placing?.kind === 'SUBCKT' ? placing.value ?? null : null}
-          subckts={sch.subckts} onPick={pick} onPickSubckt={pickSubckt} onOpenSubckt={openSubckt} onNewSubckt={() => setNamingSubckt(true)} onDeleteSubckt={deleteSubckt}
+          subckts={sch.subckts} onPick={pick} onPickSubckt={pickSubckt} onOpenSubckt={openSubckt} onNewSubckt={() => setNaming('new')} onDeleteSubckt={deleteSubckt}
         />
         <SchematicCanvas
           sch={sheet} compiled={view} selection={selection} tool={tool} placing={placing}
-          probeColors={editing === null ? probeColors : new Map()} opValues={editing === null ? opValues : null} errorParts={errorParts} fitToken={fitToken}
+          probeColors={resultOf === editing ? probeColors : new Map()} opValues={resultOf === editing ? opValues : null} errorParts={errorParts} fitToken={fitToken}
           onCommit={commit} onSelect={setSelected} onProbe={onProbe} onCancel={cancelTool} onCursor={setCursor} onZoom={setZoom} onOpenSubckt={openSubckt}
         />
-        <Inspector sch={sheet} compiled={view} selection={selection} onCommit={commit} onSelect={setSelected} onRotate={rotate} onMirror={mirror} onDelete={del} editing={editing} onOpenSubckt={openSubckt} />
+        <Inspector sch={sheet} compiled={view} selection={selection} onCommit={commit} onSelect={setSelected} onRotate={rotate} onMirror={mirror} onDelete={del} editing={editing} onOpenSubckt={openSubckt} onRoot={onRoot} onRenameSubckt={renameOpen} onSubcktParams={setSubcktParams} onMakeSubckt={askMakeSubckt} />
       </div>
 
       <div className="dock" style={{ height: dockH }}>
@@ -378,7 +420,7 @@ export function App() {
           )}
         </div>
         <div className="dock-body">
-          {tab === 'netlist' && <pre className="dock-text">{compiled.netlist}</pre>}
+          {tab === 'netlist' && <pre className="dock-text">{(bench ?? compiled).netlist}</pre>}
           {tab === 'log' && <pre className="dock-text">{result?.log.trim() || 'No run yet.'}</pre>}
           {tab === 'wave' && (!result ? (
             <div className="plot"><div className="plot-empty">Press Run (F5) to simulate.</div></div>
@@ -401,7 +443,7 @@ export function App() {
       </div>
 
       {quickAdd && <QuickAdd subckts={sch.subckts} onClose={() => setQuickAdd(false)} onPick={(kind) => { setQuickAdd(false); pick(kind); }} onPickSubckt={(name) => { setQuickAdd(false); pickSubckt(name); }} />}
-      {namingSubckt && <NamePrompt title="New subcircuit" problem={(n) => subcktNameProblem(sch, n)} onSubmit={createSubckt} onClose={() => setNamingSubckt(false)} />}
+      {naming && <NamePrompt title={naming === 'new' ? 'New subcircuit' : 'Make subcircuit from selection'} problem={(n) => subcktNameProblem(sch, n)} onSubmit={naming === 'new' ? createSubckt : makeFromSelection} onClose={() => setNaming(null)} />}
 
       <div className="statusbar">
         <span className={`status-main${status.error ? ' is-error' : ''}`} role="status">{status.text}</span>

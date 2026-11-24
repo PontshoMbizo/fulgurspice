@@ -58,14 +58,53 @@ interface Props {
   /** Name of the subcircuit whose sheet is open, or null on the top sheet. */
   editing: string | null;
   onOpenSubckt: (name: string) => void;
+  /** Change the document itself (analysis, title, directives) even while a subcircuit sheet is open. */
+  onRoot: (patch: Partial<Schematic>) => void;
+  /** Rename the open subcircuit / set its parameter defaults. */
+  onRenameSubckt: (name: string) => void;
+  onSubcktParams: (params: string) => void;
+  onMakeSubckt: () => void;
 }
 
-export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRotate, onMirror, onDelete, editing, onOpenSubckt }: Props) {
+export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRotate, onMirror, onDelete, editing, onOpenSubckt, onRoot, onRenameSubckt, onSubcktParams, onMakeSubckt }: Props) {
   const parts = sch.parts.filter((p) => selection.has(p.id));
   const part = selection.size === 1 && parts.length === 1 ? parts[0] : null;
   const def = part ? symbolFor(part) : null;
   const a = sch.analysis;
-  const setA = (next: Analysis) => onCommit({ ...sch, analysis: next });
+  const setA = (next: Analysis) => onRoot({ analysis: next });
+  const setBench = (on: boolean) => onCommit(patchParts(sch, selection, () => ({ bench: on || undefined })));
+  const defParams = editing !== null ? (sch.subckts.find((d) => d.name === editing)?.params ?? '') : '';
+
+  const analysisFieldset = (
+    <fieldset className="etched">
+      <legend>Analysis</legend>
+      <label className="param">
+        <span>Type</span>
+        <select value={a.kind} onChange={(e) => setA(DEFAULTS[e.target.value as Analysis['kind']])}>
+          <option value="tran">Transient</option>
+          <option value="ac">AC sweep</option>
+          <option value="dc">DC sweep</option>
+          <option value="op">Operating point</option>
+        </select>
+      </label>
+      {a.kind === 'tran' && <>
+        <Field label="Stop time" value={a.stop} mono hint="seconds, e.g. 10m" onCommit={(v) => setA({ ...a, stop: v })} />
+        <Field label="Max step" value={a.step} mono onCommit={(v) => setA({ ...a, step: v })} />
+      </>}
+      {a.kind === 'ac' && <>
+        <Field label="Start frequency" value={a.fstart} mono onCommit={(v) => setA({ ...a, fstart: v })} />
+        <Field label="Stop frequency" value={a.fstop} mono onCommit={(v) => setA({ ...a, fstop: v })} />
+        <Field label="Points / decade" value={a.points} mono onCommit={(v) => setA({ ...a, points: v })} />
+      </>}
+      {a.kind === 'dc' && <>
+        <Field label="Source" value={a.source} mono onCommit={(v) => setA({ ...a, source: v })} />
+        <Field label="Start" value={a.start} mono onCommit={(v) => setA({ ...a, start: v })} />
+        <Field label="Stop" value={a.stop} mono onCommit={(v) => setA({ ...a, stop: v })} />
+        <Field label="Step" value={a.step} mono onCommit={(v) => setA({ ...a, step: v })} />
+      </>}
+      {a.kind === 'op' && <p className="muted">DC voltages and currents with capacitors open and inductors shorted. Node voltages are written on the schematic.</p>}
+    </fieldset>
+  );
 
   return (
     <aside className="inspector" aria-label="Properties">
@@ -76,6 +115,12 @@ export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRota
             <legend>Properties</legend>
             {def.prefix && <Field label="Reference" value={part.ref} mono onCommit={(v) => onCommit(patchParts(sch, selection, () => ({ ref: v.trim() })))} />}
             {def.valueLabel && <Field label={def.valueLabel} value={part.value} hint={def.valueHint} mono onCommit={(v) => onCommit(patchParts(sch, selection, () => ({ value: v })))} />}
+            {part.kind === 'SUBCKT' && <Field label="Parameters" value={part.params ?? ''} mono hint="Override defaults, e.g. R=2k C=47n" onCommit={(v) => onCommit(patchParts(sch, selection, () => ({ params: v.trim() || undefined })))} />}
+            {editing !== null && part.kind !== 'PORT' && (
+              <label className="check" title="Drawn and simulated when this sheet is run on its own, but not part of the subcircuit">
+                <input type="checkbox" checked={!!part.bench} onChange={(e) => setBench(e.target.checked)} /> Test bench only
+              </label>
+            )}
             {part.kind === 'SUBCKT' && (
               <div className="row-buttons">
                 <button type="button" className="btn" disabled={!part.value.trim()} onClick={() => onOpenSubckt(part.value.trim())}>Open subcircuit</button>
@@ -100,51 +145,32 @@ export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRota
               <button type="button" className="btn" onClick={onMirror} disabled={!parts.length}>Mirror</button>
               <button type="button" className="btn btn-delete" onClick={onDelete}>Delete</button>
             </div>
+            <div className="row-buttons">
+              <button type="button" className="btn" disabled={!parts.length} title="Move the selection into a new subcircuit and put an instance in its place" onClick={onMakeSubckt}>Make subcircuit…</button>
+              {editing !== null && parts.length > 0 && <button type="button" className="btn" onClick={() => setBench(!parts.every((q) => q.bench))}>{parts.every((q) => q.bench) ? 'Part of subcircuit' : 'Test bench only'}</button>}
+            </div>
           </fieldset>
         ) : editing !== null ? (
-          <fieldset className="etched">
-            <legend>Subcircuit</legend>
-            <p className="hint">Drawing the inside of <strong>{editing}</strong>. Each <em>Subcircuit port</em> part becomes a pin on its symbol, in the order you place them.</p>
-            <p className="hint">Ports: {subcktPorts(sch).length ? <span className="mono">{subcktPorts(sch).join(', ')}</span> : 'none yet'}</p>
-            <p className="hint">Press Run to simulate the whole circuit. Use “Top sheet” in the menu bar to go back.</p>
-          </fieldset>
-        ) : (
           <>
             <fieldset className="etched">
-              <legend>Analysis</legend>
-              <label className="param">
-                <span>Type</span>
-                <select value={a.kind} onChange={(e) => setA(DEFAULTS[e.target.value as Analysis['kind']])}>
-                  <option value="tran">Transient</option>
-                  <option value="ac">AC sweep</option>
-                  <option value="dc">DC sweep</option>
-                  <option value="op">Operating point</option>
-                </select>
-              </label>
-              {a.kind === 'tran' && <>
-                <Field label="Stop time" value={a.stop} mono hint="seconds, e.g. 10m" onCommit={(v) => setA({ ...a, stop: v })} />
-                <Field label="Max step" value={a.step} mono onCommit={(v) => setA({ ...a, step: v })} />
-              </>}
-              {a.kind === 'ac' && <>
-                <Field label="Start frequency" value={a.fstart} mono onCommit={(v) => setA({ ...a, fstart: v })} />
-                <Field label="Stop frequency" value={a.fstop} mono onCommit={(v) => setA({ ...a, fstop: v })} />
-                <Field label="Points / decade" value={a.points} mono onCommit={(v) => setA({ ...a, points: v })} />
-              </>}
-              {a.kind === 'dc' && <>
-                <Field label="Source" value={a.source} mono onCommit={(v) => setA({ ...a, source: v })} />
-                <Field label="Start" value={a.start} mono onCommit={(v) => setA({ ...a, start: v })} />
-                <Field label="Stop" value={a.stop} mono onCommit={(v) => setA({ ...a, stop: v })} />
-                <Field label="Step" value={a.step} mono onCommit={(v) => setA({ ...a, step: v })} />
-              </>}
-              {a.kind === 'op' && <p className="muted">DC voltages and currents with capacitors open and inductors shorted. Node voltages are written on the schematic.</p>}
+              <legend>Subcircuit</legend>
+              <Field label="Name" value={editing} mono hint="Renames every instance too" onCommit={onRenameSubckt} />
+              <Field label="Parameters" value={defParams} mono hint="Defaults, e.g. R=1k C=100n. Use them in values as {R}" onCommit={onSubcktParams} />
+              <p className="hint">Ports: {subcktPorts(sch).length ? <span className="mono">{subcktPorts(sch).join(', ')}</span> : 'none yet'}. Each <em>Subcircuit port</em> part becomes a pin, in the order you place them.</p>
+              <p className="hint">Mark a part <em>Test bench only</em> to drive this sheet on its own (source, load, ground): Run then simulates just this subcircuit. Use Simulate → Run whole circuit for the full design, and “Top sheet” to go back.</p>
             </fieldset>
+            {analysisFieldset}
+          </>
+        ) : (
+          <>
+            {analysisFieldset}
             <fieldset className="etched">
               <legend>Schematic</legend>
-              <Field label="Title" value={sch.title} onCommit={(v) => onCommit({ ...sch, title: v })} />
+              <Field label="Title" value={sch.title} onCommit={(v) => onRoot({ title: v })} />
             </fieldset>
             <fieldset className="etched">
               <legend>SPICE directives</legend>
-              <Directives value={sch.directives} onCommit={(v) => onCommit({ ...sch, directives: v })} />
+              <Directives value={sch.directives} onCommit={(v) => onRoot({ directives: v })} />
             </fieldset>
           </>
         )}
