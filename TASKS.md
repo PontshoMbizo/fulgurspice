@@ -8,12 +8,13 @@
 - [x] **DONE** Grid canvas with pan/zoom, KiCad colours, palette, inspector
 - [x] **DONE** Place, select, move, rotate, mirror, delete; undo/redo; autosave; open/save JSON
 - [x] **DONE** Orthogonal wiring with automatic junction dots and open-pin markers
-- [ ] Rubber-band wires when a part moves (today the wires stay behind)
-- [ ] Marquee (box) selection, copy/paste, duplicate
-- [ ] Split a wire where a new wire lands mid-segment, and merge collinear segments, so stored geometry stays tidy
-- [ ] Drag a wire segment; delete a single segment of a longer run
-- [ ] Editable label positions for reference and value text (they overlap in tight layouts)
-- [ ] Keyboard shortcuts to place common parts (KiCad `A` add-symbol search box)
+- [x] **DONE** Rubber-band wires when a part moves
+- [x] **DONE** Marquee (box) selection (left-to-right = fully inside, right-to-left = touching) — *needs a browser check*
+- [x] **DONE** Copy / cut / paste / duplicate (Ctrl+C/X/V/D)
+- [x] **DONE** Split a wire where a new wire lands mid-segment, and merge collinear segments (`normalizeWires` in `store.ts`)
+- [x] **DONE** Drag a wire segment (neighbours rubber-band); delete one segment of a run (Shift+Del, hover the segment)
+- [x] **DONE** Editable label positions: drag the text of a selected part; Inspector has a reset button
+- [x] **DONE** `A` opens the add-part search box
 
 ## Phase 2 — netlister
 - [x] **DONE** Union-find connectivity, net labels, ground, deterministic node names
@@ -50,6 +51,6 @@
 - [ ] Import LTspice `.asc` and KiCad netlists
 
 ## Housekeeping
-- [ ] Create the GitHub repo and push (commands in the onboarding notes)
+- [ ] Create the GitHub repo and push (`gh repo create fulgurspice --private --source=. --remote=origin --push`)
 - [ ] CI: `npm test` + `npm run build`
 - [ ] Playwright smoke test checked into the repo (place parts, wire, run, probe)

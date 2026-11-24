@@ -6,6 +6,7 @@
 // to it. Two wires that merely cross are not.
 
 import type { Analysis, Part, Point, Schematic, Wire } from './types';
+import { pointKey } from './geometry';
 import { MODELS, SYMBOLS, pinPositions } from './symbols';
 import { parseSI, toSpice } from './units';
 
@@ -28,8 +29,6 @@ export interface Compiled {
   /** Where to draw junction dots (three or more connections meet). */
   junctions: Point[];
 }
-
-const key = (x: number, y: number) => `${x},${y}`;
 
 class UnionFind {
   private parent = new Map<string, string>();
@@ -78,11 +77,11 @@ export function compile(sch: Schematic): Compiled {
   const issues: Issue[] = [];
   const uf = new UnionFind();
   const points = new Map<string, Point>();
-  const touch = (x: number, y: number) => { const k = key(x, y); uf.add(k); points.set(k, { x, y }); return k; };
+  const touch = (x: number, y: number) => { const k = pointKey(x, y); uf.add(k); points.set(k, { x, y }); return k; };
 
   const pins = sch.parts.flatMap((part) => pinPositions(part).map((pin) => ({ part, pin, k: touch(pin.x, pin.y) })));
   for (const w of sch.wires) uf.union(touch(w.x1, w.y1), touch(w.x2, w.y2));
-  for (const w of sch.wires) for (const [k, p] of points) if (onWire(w, p.x, p.y)) uf.union(k, key(w.x1, w.y1));
+  for (const w of sch.wires) for (const [k, p] of points) if (onWire(w, p.x, p.y)) uf.union(k, pointKey(w.x1, w.y1));
 
   // Same-name labels join, and every ground symbol is the one node "0".
   const named = new Map<string, string>();
@@ -113,7 +112,7 @@ export function compile(sch: Schematic): Compiled {
 
   const pinNode = new Map<string, string>();
   for (const { part, pin, k } of pins) pinNode.set(`${part.id}:${pin.name}`, nodeAt(k));
-  const wireNode = new Map(sch.wires.map((w) => [w.id, nodeAt(key(w.x1, w.y1))] as const));
+  const wireNode = new Map(sch.wires.map((w) => [w.id, nodeAt(pointKey(w.x1, w.y1))] as const));
 
   // Electrical rule checks: catch here what ngspice would report as a singular matrix.
   const devices = sch.parts.filter((p) => SYMBOLS[p.kind].card);
@@ -161,7 +160,7 @@ export function compile(sch: Schematic): Compiled {
   for (const p of devices) {
     const def = SYMBOLS[p.kind];
     const clean = { ...p, ref: p.ref.toUpperCase(), value: p.value.replace(/[\r\n]+/g, ' ') };
-    lines.push(def.card!(clean, def.pins.map((pin) => pinNode.get(`${p.id}:${pin.name}`)!)));
+    lines.push(def.card!(clean, pinPositions(p).map((pin) => pinNode.get(`${p.id}:${pin.name}`)!)));
     const m = MODELS[p.value.trim().toUpperCase()];
     if (m && def.valueLabel === 'Model') models.add(m);
   }

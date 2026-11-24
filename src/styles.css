@@ -116,6 +116,7 @@ html, body, #root { height: 100%; margin: 0; }
 .net-label { font-size: 9px; font-weight: 600; fill: var(--net-text); pointer-events: none; }
 .part.is-selected .sym, .part.is-selected .sym-body, .part.is-selected .sym-solid { stroke: var(--select); }
 .part.is-selected .sym-solid { fill: var(--select); }
+.part.is-selected .part-ref, .part.is-selected .part-value, .part.is-selected .net-label { pointer-events: all; cursor: move; }
 .part.is-selected .part-ref, .part.is-selected .part-value, .part.is-selected .net-label { fill: var(--select); }
 .part.has-error .sym, .part.has-error .sym-body { stroke: var(--danger); stroke-width: 2.4; }
 .part.is-ghost { opacity: 0.55; pointer-events: none; }
@@ -156,7 +157,11 @@ html, body, #root { height: 100%; margin: 0; }
 .dock-grip { height: 4px; cursor: ns-resize; flex: none; margin-top: -2px; }
 .dock-titlerow { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; padding: 2px 6px; border-bottom: 1px solid var(--rule); flex: none; }
 .dock-tabs { display: flex; gap: 2px; margin-right: 8px; }
-.dock-tab { padding: 2px 10px; background: #e4e4e4; border: 1px solid var(--frame); cursor: default; }
+.dock-tab { display: inline-flex; align-items: center; background: #e4e4e4; border: 1px solid var(--frame); cursor: default; }
+.dock-tab > button { all: unset; box-sizing: border-box; padding: 2px 10px; cursor: default; }
+.dock-tab > .dock-tab-close { padding: 2px 6px 2px 0; color: var(--ink-3); line-height: 1; }
+.dock-tab > .dock-tab-close:hover { color: #c00; }
+.dock-tab > button:focus-visible { outline: 1px dotted #000; outline-offset: -2px; }
 .dock-tab.is-active { background: #fff; font-weight: 600; }
 .trace-chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 2px 0 6px; height: 20px; background: #000; border: 1px solid #555; font-family: var(--mono); font-size: 11px; }
 .trace-chip button { all: unset; cursor: pointer; padding: 0 4px; color: #bbb; }
@@ -176,6 +181,22 @@ html, body, #root { height: 100%; margin: 0; }
 .op-table td, .op-table th { padding: 1px 16px 1px 0; text-align: left; font-weight: 400; }
 .op-table th { color: var(--ink-3); border-bottom: 1px solid var(--rule); }
 .op-table td.num { text-align: right; }
+
+/* ------------------------------------------------------------------ marquee */
+.marquee { fill: rgb(0 120 215 / 0.08); stroke: #0078d7; stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
+.marquee.is-crossing { fill: rgb(0 150 70 / 0.08); stroke: #009646; stroke-dasharray: 4 3; }
+
+/* ------------------------------------------------------------------ overlay */
+.overlay-backdrop { position: absolute; inset: 0; z-index: 40; background: rgb(0 0 0 / 0.15); display: flex; align-items: flex-start; justify-content: center; padding-top: 18vh; }
+.overlay-box { min-width: 320px; max-width: 420px; background: #fff; border: 1px solid var(--frame); box-shadow: 0 4px 18px rgb(0 0 0 / 0.25); }
+.overlay-box input { box-sizing: border-box; width: 100%; height: 26px; padding: 0 8px; border: 1px solid var(--field-border); border-radius: 0; font: inherit; }
+.overlay-box input:focus { border-color: var(--field-focus); outline: 1px solid var(--field-focus); outline-offset: -2px; }
+.overlay-title { padding: 6px 8px 0; font-weight: 600; }
+.overlay-list { margin: 4px 0 0; padding: 4px; list-style: none; max-height: 260px; overflow-y: auto; border-top: 1px solid var(--rule); }
+.overlay-list li button { all: unset; display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; padding: 3px 8px; cursor: default; }
+.overlay-list li button:hover, .overlay-list li button.is-active { background: var(--hover); }
+.overlay-empty { padding: 8px; color: var(--ink-3); }
+.overlay-actions { display: flex; justify-content: flex-end; gap: 6px; padding: 8px; }
 
 @media (max-width: 900px) {
   .workspace { grid-template-columns: 150px minmax(0, 1fr); }

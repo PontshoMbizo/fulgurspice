@@ -40,7 +40,7 @@ Simulink-style block simulator backed by Scilab) and deliberately shares its des
 - Run `npm test` and `npm run build` before calling anything done. Engine tests run real ngspice.
 - Verify UI changes in a browser; the core tests do not cover the canvas.
 - Pontsho wants the "why" before the "how": explain trade-offs, measure before claiming.
-- Dev machine is Fedora (dnf). `gh` CLI is not installed.
+- Dev machine is Fedora (dnf). `gh` CLI is installed.
 - Security note for later: part values and directives are free text that goes into the netlist.
   Harmless in the browser, but a grading server must not run user netlists unsandboxed
   (ngspice has `.control` blocks with shell access). Reuse fulgurlab's hardened container.

@@ -1,7 +1,9 @@
 // Document state: the schematic plus undo history, and the pure edits the UI makes.
 
-import { SYMBOLS, nextRef } from '../core/symbols';
-import { emptySchematic, type Part, type PartKind, type Rot, type Schematic, type Wire } from '../core/types';
+import { pointKey, route } from '../core/geometry';
+import { onWire } from '../core/netlist';
+import { SYMBOLS, nextRef, pinPositions } from '../core/symbols';
+import { emptySchematic, type Part, type PartKind, type Point, type Rot, type Schematic, type Wire } from '../core/types';
 
 export interface Doc { sch: Schematic; past: Schematic[]; future: Schematic[] }
 export type DocAction = { type: 'commit'; sch: Schematic } | { type: 'load'; sch: Schematic } | { type: 'undo' } | { type: 'redo' };
@@ -10,11 +12,80 @@ const HISTORY = 200;
 
 export function docReducer(doc: Doc, action: DocAction): Doc {
   switch (action.type) {
-    case 'commit': return action.sch === doc.sch ? doc : { sch: action.sch, past: [...doc.past.slice(-HISTORY + 1), doc.sch], future: [] };
-    case 'load': return { sch: action.sch, past: [], future: [] };
+    case 'commit': { const sch = normalizeWires(action.sch); return sch === doc.sch ? doc : { sch, past: [...doc.past.slice(-HISTORY + 1), doc.sch], future: [] }; }
+    case 'load': return { sch: normalizeWires(action.sch), past: [], future: [] };
     case 'undo': return doc.past.length ? { sch: doc.past[doc.past.length - 1], past: doc.past.slice(0, -1), future: [doc.sch, ...doc.future] } : doc;
     case 'redo': return doc.future.length ? { sch: doc.future[0], past: [...doc.past, doc.sch], future: doc.future.slice(1) } : doc;
   }
+}
+
+const isEnd = (w: Wire, x: number, y: number) => (w.x1 === x && w.y1 === y) || (w.x2 === x && w.y2 === y);
+
+/** Split any wire that a pin or another wire's endpoint lands on mid-span, then
+ * merge collinear wire pairs that share an endpoint with nothing else on it. Run
+ * once per commit (see docReducer) rather than after every individual edit. */
+export function normalizeWires(sch: Schematic): Schematic {
+  const split = splitWires(sch);
+  const merged = mergeCollinear(sch, split);
+  return merged === sch.wires ? sch : { ...sch, wires: merged };
+}
+
+function splitWires(sch: Schematic): Wire[] {
+  let wires = sch.wires;
+  for (let guard = 0; guard < 10000; guard++) {
+    const landing: { x: number; y: number }[] = [];
+    for (const part of sch.parts) for (const pin of pinPositions(part)) landing.push(pin);
+    for (const w of wires) { landing.push({ x: w.x1, y: w.y1 }); landing.push({ x: w.x2, y: w.y2 }); }
+    let hitIndex = -1, hitPoint: { x: number; y: number } | null = null;
+    for (let i = 0; i < wires.length && hitIndex < 0; i++) {
+      const w = wires[i];
+      for (const p of landing) {
+        if (onWire(w, p.x, p.y) && !isEnd(w, p.x, p.y)) { hitIndex = i; hitPoint = p; break; }
+      }
+    }
+    if (hitIndex < 0) return wires;
+    const w = wires[hitIndex];
+    const pieces = [...route({ x: w.x1, y: w.y1 }, hitPoint!), ...route(hitPoint!, { x: w.x2, y: w.y2 })].map((s) => ({ id: uid(), ...s }));
+    wires = [...wires.slice(0, hitIndex), ...pieces, ...wires.slice(hitIndex + 1)];
+  }
+  return wires;
+}
+
+function mergeCollinear(sch: Schematic, wires: Wire[]): Wire[] {
+  const pinCount = new Map<string, number>();
+  for (const part of sch.parts) for (const pin of pinPositions(part)) {
+    const k = pointKey(pin.x, pin.y);
+    pinCount.set(k, (pinCount.get(k) ?? 0) + 1);
+  }
+  for (let guard = 0; guard < 10000; guard++) {
+    const at = new Map<string, number[]>();
+    wires.forEach((w, i) => {
+      for (const [x, y] of [[w.x1, w.y1], [w.x2, w.y2]] as const) {
+        const k = pointKey(x, y);
+        const arr = at.get(k); if (arr) arr.push(i); else at.set(k, [i]);
+      }
+    });
+    let mergedOne = false;
+    for (const [k, idxs] of at) {
+      if (pinCount.has(k) || idxs.length !== 2 || idxs[0] === idxs[1]) continue;
+      const [ia, ib] = idxs;
+      const A = wires[ia], B = wires[ib];
+      const [px, py] = k.split(',').map(Number);
+      const aFar = (A.x1 === px && A.y1 === py) ? { x: A.x2, y: A.y2 } : { x: A.x1, y: A.y1 };
+      const bFar = (B.x1 === px && B.y1 === py) ? { x: B.x2, y: B.y2 } : { x: B.x1, y: B.y1 };
+      const v1x = px - aFar.x, v1y = py - aFar.y;
+      const v2x = bFar.x - px, v2y = bFar.y - py;
+      const cross = v1x * v2y - v1y * v2x;
+      const dot = v1x * v2x + v1y * v2y;
+      if (cross !== 0 || dot <= 0) continue;
+      const merged: Wire = { id: uid(), x1: aFar.x, y1: aFar.y, x2: bFar.x, y2: bFar.y };
+      wires = [...wires.filter((_, i) => i !== ia && i !== ib), merged];
+      mergedOne = true;
+      break;
+    }
+    if (!mergedOne) break;
+  }
+  return wires;
 }
 
 export const uid = () => Math.random().toString(36).slice(2, 10);
@@ -30,17 +101,82 @@ export function addWires(sch: Schematic, segments: Omit<Wire, 'id'>[]): Schemati
   return real.length ? { ...sch, wires: [...sch.wires, ...real] } : sch;
 }
 
+/** Move the selected parts/wires by (dx, dy). Any *other* wire that has exactly
+ * one endpoint attached to a moving pin or wire-endpoint is rubber-banded: it
+ * stretches (gaining a bend if needed) to follow, rather than being left behind. */
 export function moveItems(sch: Schematic, ids: Set<string>, dx: number, dy: number): Schematic {
   if (!dx && !dy) return sch;
-  return {
-    ...sch,
-    parts: sch.parts.map((p) => (ids.has(p.id) ? { ...p, x: p.x + dx, y: p.y + dy } : p)),
-    wires: sch.wires.map((w) => (ids.has(w.id) ? { ...w, x1: w.x1 + dx, y1: w.y1 + dy, x2: w.x2 + dx, y2: w.y2 + dy } : w)),
-  };
+  const moving = new Set<string>();
+  for (const p of sch.parts) if (ids.has(p.id)) for (const pin of pinPositions(p)) moving.add(pointKey(pin.x, pin.y));
+  for (const w of sch.wires) if (ids.has(w.id)) { moving.add(pointKey(w.x1, w.y1)); moving.add(pointKey(w.x2, w.y2)); }
+
+  const parts = sch.parts.map((p) => (ids.has(p.id) ? { ...p, x: p.x + dx, y: p.y + dy } : p));
+  const wires: Wire[] = [];
+  for (const w of sch.wires) {
+    if (ids.has(w.id)) { wires.push({ ...w, x1: w.x1 + dx, y1: w.y1 + dy, x2: w.x2 + dx, y2: w.y2 + dy }); continue; }
+    const aMoving = moving.has(pointKey(w.x1, w.y1));
+    const bMoving = moving.has(pointKey(w.x2, w.y2));
+    if (!aMoving && !bMoving) { wires.push(w); continue; }
+    if (aMoving && bMoving) { wires.push({ ...w, x1: w.x1 + dx, y1: w.y1 + dy, x2: w.x2 + dx, y2: w.y2 + dy }); continue; }
+    const fixed = aMoving ? { x: w.x2, y: w.y2 } : { x: w.x1, y: w.y1 };
+    const moved = aMoving ? { x: w.x1 + dx, y: w.y1 + dy } : { x: w.x2 + dx, y: w.y2 + dy };
+    for (const seg of route(fixed, moved)) wires.push({ id: uid(), ...seg });
+  }
+  return { ...sch, parts, wires };
 }
 
 export function deleteItems(sch: Schematic, ids: Set<string>): Schematic {
   return { ...sch, parts: sch.parts.filter((p) => !ids.has(p.id)), wires: sch.wires.filter((w) => !ids.has(w.id)) };
+}
+
+export interface Clipboard { parts: Part[]; wires: Wire[] }
+
+/** Snapshot the selected parts and wires for copy / duplicate. */
+export function copyItems(sch: Schematic, ids: Set<string>): Clipboard {
+  return { parts: sch.parts.filter((p) => ids.has(p.id)), wires: sch.wires.filter((w) => ids.has(w.id)) };
+}
+
+/** Add a clipboard's contents shifted by (dx, dy). New ids everywhere; parts get
+ * the lowest free designator for their prefix (R1 -> R4), so references stay unique. */
+export function pasteItems(sch: Schematic, clip: Clipboard, dx: number, dy: number): { sch: Schematic; ids: string[] } {
+  const parts = [...sch.parts];
+  const added: Part[] = [];
+  for (const p of clip.parts) {
+    const prefix = SYMBOLS[p.kind].prefix;
+    const copy: Part = { ...p, id: uid(), x: p.x + dx, y: p.y + dy, ref: prefix ? nextRef(parts, prefix) : '' };
+    parts.push(copy); added.push(copy);
+  }
+  const wires = clip.wires.map((w): Wire => ({ id: uid(), x1: w.x1 + dx, y1: w.y1 + dy, x2: w.x2 + dx, y2: w.y2 + dy }));
+  return { sch: { ...sch, parts, wires: [...sch.wires, ...wires] }, ids: [...added.map((p) => p.id), ...wires.map((w) => w.id)] };
+}
+
+/** Delete only the stretch of each selected wire around `at`, between the nearest
+ * connection points on either side (pins, other wires' ends, the wire's own ends).
+ * The rest of the run stays. A point that is on no selected wire changes nothing. */
+export function removeWireSpan(sch: Schematic, ids: Set<string>, at: Point): Schematic {
+  const stopsFor = (w: Wire): number[] => {
+    const vertical = w.x1 === w.x2;
+    const pts: Point[] = [{ x: w.x1, y: w.y1 }, { x: w.x2, y: w.y2 }];
+    for (const part of sch.parts) for (const pin of pinPositions(part)) pts.push(pin);
+    for (const o of sch.wires) if (o.id !== w.id) { pts.push({ x: o.x1, y: o.y1 }); pts.push({ x: o.x2, y: o.y2 }); }
+    return [...new Set(pts.filter((q) => onWire(w, q.x, q.y)).map((q) => (vertical ? q.y : q.x)))].sort((a, b) => a - b);
+  };
+  let changed = false;
+  const wires: Wire[] = [];
+  for (const w of sch.wires) {
+    if (!ids.has(w.id) || !onWire(w, at.x, at.y) || (w.x1 !== w.x2 && w.y1 !== w.y2)) { wires.push(w); continue; }
+    const vertical = w.x1 === w.x2;
+    const t = vertical ? at.y : at.x;
+    const stops = stopsFor(w);
+    let a = Math.max(...stops.filter((s) => s <= t)), b = Math.min(...stops.filter((s) => s >= t));
+    if (a === b) { const next = stops.find((s) => s > t); if (next !== undefined) b = next; else a = Math.max(...stops.filter((s) => s < t)); }
+    const seg = (from: number, to: number): Wire => (vertical ? { id: uid(), x1: w.x1, y1: from, x2: w.x1, y2: to } : { id: uid(), x1: from, y1: w.y1, x2: to, y2: w.y1 });
+    const lo = stops[0], hi = stops[stops.length - 1];
+    if (lo < a) wires.push(seg(lo, a));
+    if (b < hi) wires.push(seg(b, hi));
+    changed = true;
+  }
+  return changed ? { ...sch, wires } : sch;
 }
 
 export function patchParts(sch: Schematic, ids: Set<string>, patch: (p: Part) => Partial<Part>): Schematic {
@@ -60,7 +196,12 @@ export function parseSchematic(text: string): Schematic {
   const parts = (Array.isArray(d.parts) ? d.parts : []).map((p): Part => {
     if (!p || !(p.kind in SYMBOLS)) throw new Error(`Unknown part kind "${String(p?.kind)}"`);
     if (![0, 90, 180, 270].includes(p.rot)) throw new Error('Schematic has a bad rotation');
-    return { id: String(p.id || uid()), kind: p.kind, ref: String(p.ref ?? ''), x: int(p.x), y: int(p.y), rot: p.rot, mirror: Boolean(p.mirror), value: String(p.value ?? '') };
+    const off = (o: unknown): Point | undefined => { const q = o as Point | undefined; return q && (q.x || q.y) ? { x: int(q.x), y: int(q.y) } : undefined; };
+    const part: Part = { id: String(p.id || uid()), kind: p.kind, ref: String(p.ref ?? ''), x: int(p.x), y: int(p.y), rot: p.rot, mirror: Boolean(p.mirror), value: String(p.value ?? '') };
+    const refOffset = off(p.refOffset), valueOffset = off(p.valueOffset);
+    if (refOffset) part.refOffset = refOffset;
+    if (valueOffset) part.valueOffset = valueOffset;
+    return part;
   });
   const wires = (Array.isArray(d.wires) ? d.wires : []).map((w): Wire => ({ id: String(w.id || uid()), x1: int(w.x1), y1: int(w.y1), x2: int(w.x2), y2: int(w.y2) }));
   const base = emptySchematic();

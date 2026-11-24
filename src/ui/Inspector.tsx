@@ -77,6 +77,11 @@ export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRota
               <button type="button" className="btn" onClick={onMirror}>Mirror</button>
               <button type="button" className="btn btn-delete" onClick={onDelete}>Delete</button>
             </div>
+            {(part.refOffset || part.valueOffset) && (
+              <div className="row-buttons">
+                <button type="button" className="btn" title="Drag the text on the sheet to move it" onClick={() => onCommit({ ...sch, parts: sch.parts.map((q) => { if (q.id !== part.id) return q; const { refOffset: _r, valueOffset: _v, ...rest } = q; return rest; }) })}>Reset label positions</button>
+              </div>
+            )}
           </fieldset>
         ) : selection.size ? (
           <fieldset className="etched">

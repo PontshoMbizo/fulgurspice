@@ -18,6 +18,10 @@ export interface Part {
   mirror: boolean;
   /** value / model / net name, depending on the kind. Free text, as in LTspice. */
   value: string;
+  /** Where the reference / value text sits relative to its default spot, in grid
+   * units. Absent = default placement. Set by dragging the text in the editor. */
+  refOffset?: Point;
+  valueOffset?: Point;
 }
 
 export interface Wire {

@@ -2,6 +2,7 @@
 // pin is on a wire exactly when their integer coordinates say so.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { route } from '../core/geometry';
 import type { Compiled } from '../core/netlist';
 import { onWire } from '../core/netlist';
 import { SYMBOLS, partBox, pinPositions } from '../core/symbols';
@@ -37,7 +38,26 @@ interface Props {
 interface View { panX: number; panY: number; zoom: number }
 type Drag =
   | { type: 'pan'; sx: number; sy: number; panX: number; panY: number; moved: boolean }
-  | { type: 'move'; start: Point; ids: Set<string> };
+  | { type: 'move'; start: Point; ids: Set<string> }
+  | { type: 'marquee'; start: Point; additive: boolean }
+  | { type: 'label'; start: Point; id: string; which: 'ref' | 'value' };
+
+/** Does a box (possibly reversed start/end) select this item's extent? Dragging
+ * left-to-right only takes items fully inside the box (KiCad's convention);
+ * right-to-left takes anything the box touches. */
+function marqueeHits(start: Point, end: Point, bx0: number, by0: number, bx1: number, by1: number): boolean {
+  const x0 = Math.min(start.x, end.x), x1 = Math.max(start.x, end.x);
+  const y0 = Math.min(start.y, end.y), y1 = Math.max(start.y, end.y);
+  return start.x <= end.x
+    ? bx0 >= x0 && bx1 <= x1 && by0 >= y0 && by1 <= y1
+    : bx0 <= x1 && bx1 >= x0 && by0 <= y1 && by1 >= y0;
+}
+
+/** The part with its reference or value text nudged by `by` grid units more. */
+export function withLabelOffset(sch: Schematic, id: string, which: 'ref' | 'value', by: Point): Schematic {
+  const key = which === 'ref' ? 'refOffset' : 'valueOffset';
+  return { ...sch, parts: sch.parts.map((p) => (p.id === id ? { ...p, [key]: { x: (p[key]?.x ?? 0) + by.x, y: (p[key]?.y ?? 0) + by.y } } : p)) };
+}
 
 function PartView({ part, selected, error, ghost, open }: { part: Part; selected?: boolean; error?: boolean; ghost?: boolean; open?: Point[] }) {
   const def = SYMBOLS[part.kind];
@@ -45,6 +65,7 @@ function PartView({ part, selected, error, ghost, open }: { part: Part; selected
   const b = partBox(part);
   const cx = ((b.x0 + b.x1) / 2) * G, cy = ((b.y0 + b.y1) / 2) * G;
   const tall = b.y1 - b.y0 >= b.x1 - b.x0;
+  const ro = part.refOffset ?? { x: 0, y: 0 }, vo = part.valueOffset ?? { x: 0, y: 0 };
   const cls = `part${selected ? ' is-selected' : ''}${error ? ' has-error' : ''}${ghost ? ' is-ghost' : ''}`;
   return (
     <g className={cls} data-id={ghost ? undefined : part.id} data-kind="part">
@@ -55,27 +76,21 @@ function PartView({ part, selected, error, ghost, open }: { part: Part; selected
         <rect className="part-hit" x={bx0 - 0.3} y={by0 - 0.3} width={bx1 - bx0 + 0.6} height={by1 - by0 + 0.6} />
       </g>
       {open?.map((p) => <circle key={`${p.x},${p.y}`} className="pin-open" cx={p.x * G} cy={p.y * G} r={2.2} />)}
-      {part.kind === 'LABEL' && <text className="net-label" x={part.x * G + 5} y={part.y * G - 5}>{part.value}</text>}
+      {part.kind === 'LABEL' && <text className="net-label" data-label="value" x={part.x * G + 5 + vo.x * G} y={part.y * G - 5 + vo.y * G}>{part.value}</text>}
       {def.prefix && (tall ? (
         <>
-          <text className="part-ref" x={b.x1 * G + 4} y={cy - 2}>{part.ref}</text>
-          <text className="part-value" x={b.x1 * G + 4} y={cy + 10}>{part.value}</text>
+          <text className="part-ref" data-label="ref" x={b.x1 * G + 4 + ro.x * G} y={cy - 2 + ro.y * G}>{part.ref}</text>
+          <text className="part-value" data-label="value" x={b.x1 * G + 4 + vo.x * G} y={cy + 10 + vo.y * G}>{part.value}</text>
         </>
       ) : (
         <>
-          <text className="part-ref" textAnchor="middle" x={cx} y={b.y0 * G - 4}>{part.ref}</text>
-          <text className="part-value" textAnchor="middle" x={cx} y={b.y1 * G + 12}>{part.value}</text>
+          <text className="part-ref" data-label="ref" textAnchor="middle" x={cx + ro.x * G} y={b.y0 * G - 4 + ro.y * G}>{part.ref}</text>
+          <text className="part-value" data-label="value" textAnchor="middle" x={cx + vo.x * G} y={b.y1 * G + 12 + vo.y * G}>{part.value}</text>
         </>
       ))}
     </g>
   );
 }
-
-/** One bend: along x first, then y. */
-const route = (a: Point, b: Point) => [
-  { x1: a.x, y1: a.y, x2: b.x, y2: a.y },
-  { x1: b.x, y1: a.y, x2: b.x, y2: b.y },
-].filter((s) => s.x1 !== s.x2 || s.y1 !== s.y2);
 
 export function SchematicCanvas(props: Props) {
   const { sch, compiled, selection, tool, placing } = props;
@@ -85,6 +100,7 @@ export function SchematicCanvas(props: Props) {
   const [draft, setDraft] = useState<Point | null>(null);
   const [delta, setDelta] = useState<Point>({ x: 0, y: 0 });
   const [panning, setPanning] = useState(false);
+  const [marqueeEnd, setMarqueeEnd] = useState<{ x: number; y: number } | null>(null);
   const drag = useRef<Drag | null>(null);
 
   const gridAt = (e: { clientX: number; clientY: number }): Point => {
@@ -93,6 +109,14 @@ export function SchematicCanvas(props: Props) {
       x: Math.round((e.clientX - r.left - view.panX) / (view.zoom * G)),
       y: Math.round((e.clientY - r.top - view.panY) / (view.zoom * G)),
     };
+  };
+
+  /** Unrounded position in the same units the scene is drawn in (x*G), i.e. grid
+   * units times G, before rounding to a grid point. Used for the marquee box so
+   * it can be dragged smoothly instead of jumping grid cell to grid cell. */
+  const sceneAt = (e: { clientX: number; clientY: number }): { x: number; y: number } => {
+    const r = svgRef.current!.getBoundingClientRect();
+    return { x: (e.clientX - r.left - view.panX) / view.zoom, y: (e.clientY - r.top - view.panY) / view.zoom };
   };
 
   useEffect(() => { if (tool !== 'wire') setDraft(null); }, [tool]);
@@ -162,7 +186,19 @@ export function SchematicCanvas(props: Props) {
       else { const part = sch.parts.find((x) => x.id === hit); if (part) props.onProbe(part.kind === 'LABEL' || part.kind === 'GND' ? { node: compiled.pinNode.get(`${part.id}:${SYMBOLS[part.kind].pins[0].name}`)! } : { part }); }
       return;
     }
-    if (!hit) { if (!e.shiftKey) props.onSelect([]); startPan(); return; }
+    if (!hit) {
+      const start = sceneAt(e);
+      drag.current = { type: 'marquee', start, additive: e.shiftKey };
+      setMarqueeEnd(start);
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
+    const labelEl = (e.target as Element).closest('[data-label]');
+    if (labelEl && selection.has(hit)) {
+      drag.current = { type: 'label', start: p, id: hit, which: labelEl.getAttribute('data-label') as 'ref' | 'value' };
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
     let ids: Set<string>;
     if (e.shiftKey) { ids = new Set(selection); if (ids.has(hit)) ids.delete(hit); else ids.add(hit); }
     else ids = selection.has(hit) ? selection : new Set([hit]);
@@ -179,6 +215,8 @@ export function SchematicCanvas(props: Props) {
       const dx = e.clientX - d.sx, dy = e.clientY - d.sy;
       if (!d.moved && Math.hypot(dx, dy) > 3) { d.moved = true; setPanning(true); }
       if (d.moved) setView((v) => ({ ...v, panX: d.panX + dx, panY: d.panY + dy }));
+    } else if (d.type === 'marquee') {
+      setMarqueeEnd(sceneAt(e));
     } else if (delta.x !== p.x - d.start.x || delta.y !== p.y - d.start.y) setDelta({ x: p.x - d.start.x, y: p.y - d.start.y });
   };
 
@@ -187,6 +225,30 @@ export function SchematicCanvas(props: Props) {
     drag.current = null;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     setPanning(false);
+    if (d?.type === 'marquee') {
+      const end = sceneAt(e);
+      setMarqueeEnd(null);
+      if (Math.hypot(end.x - d.start.x, end.y - d.start.y) * view.zoom < 4) {
+        // A plain click on empty sheet: clear the selection.
+        if (!d.additive) props.onSelect([]);
+        return;
+      }
+      const hits: string[] = [];
+      for (const part of sch.parts) {
+        const b = partBox(part);
+        if (marqueeHits(d.start, end, b.x0 * G, b.y0 * G, b.x1 * G, b.y1 * G)) hits.push(part.id);
+      }
+      for (const w of sch.wires) {
+        if (marqueeHits(d.start, end, Math.min(w.x1, w.x2) * G, Math.min(w.y1, w.y2) * G, Math.max(w.x1, w.x2) * G, Math.max(w.y1, w.y2) * G)) hits.push(w.id);
+      }
+      props.onSelect(d.additive ? [...new Set([...selection, ...hits])] : hits);
+      return;
+    }
+    if (d?.type === 'label') {
+      if (delta.x || delta.y) props.onCommit(withLabelOffset(sch, d.id, d.which, delta));
+      setDelta({ x: 0, y: 0 });
+      return;
+    }
     if (d?.type === 'move') {
       if (delta.x || delta.y) props.onCommit(moveItems(sch, d.ids, delta.x, delta.y));
       setDelta({ x: 0, y: 0 });
@@ -194,7 +256,10 @@ export function SchematicCanvas(props: Props) {
   };
 
   const moving = drag.current?.type === 'move' && (delta.x || delta.y) ? drag.current.ids : null;
-  const shown = useMemo(() => (moving ? moveItems(sch, moving, delta.x, delta.y) : sch), [sch, moving, delta]);
+  const labelDrag = drag.current?.type === 'label' && (delta.x || delta.y) ? drag.current : null;
+  const shown = useMemo(
+    () => (moving ? moveItems(sch, moving, delta.x, delta.y) : labelDrag ? withLabelOffset(sch, labelDrag.id, labelDrag.which, delta) : sch),
+    [sch, moving, labelDrag, delta]);
 
   // Pins with nothing on them get KiCad's small open circle.
   const openPins = useMemo(() => {
@@ -266,6 +331,13 @@ export function SchematicCanvas(props: Props) {
             <line key={i} className="wire is-draft" x1={s.x1 * G} y1={s.y1 * G} x2={s.x2 * G} y2={s.y2 * G} />
           ))}
           {ghost && <PartView part={ghost} ghost />}
+          {marqueeEnd && drag.current?.type === 'marquee' && (
+            <rect
+              className={`marquee${drag.current.start.x <= marqueeEnd.x ? '' : ' is-crossing'}`}
+              x={Math.min(drag.current.start.x, marqueeEnd.x)} y={Math.min(drag.current.start.y, marqueeEnd.y)}
+              width={Math.abs(marqueeEnd.x - drag.current.start.x)} height={Math.abs(marqueeEnd.y - drag.current.start.y)}
+            />
+          )}
         </g>
       </svg>
       <div className="canvas-hint">

@@ -5,6 +5,8 @@ import { EXAMPLES } from '../src/core/examples';
 import { emptySchematic, type Part, type Schematic } from '../src/core/types';
 import { pinPositions, toWorld } from '../src/core/symbols';
 import { vectorLabel } from '../src/sim/result';
+import { copyItems, moveItems, normalizeWires, parseSchematic, pasteItems, removeWireSpan } from '../src/ui/store';
+import { withLabelOffset } from '../src/ui/SchematicCanvas';
 
 const close = (a: number | null, b: number) => expect(Math.abs((a ?? NaN) - b)).toBeLessThan(Math.abs(b) * 1e-9 + 1e-30);
 
@@ -84,6 +86,133 @@ describe('netlister', () => {
     const pins = Object.fromEntries(pinPositions(q).map((p) => [p.name, p]));
     const c = compile(sch([q, P('LABEL', '', pins.E.x, pins.E.y, 'e'), P('LABEL', '', pins.B.x, pins.B.y, 'b'), P('LABEL', '', pins.C.x, pins.C.y, 'c')], []));
     expect(c.netlist).toContain('Q1 c b e PNP_GEN');
+  });
+});
+
+describe('normalizeWires', () => {
+  it('splits a wire where a pin lands mid-span', () => {
+    const base = sch([P('R', 'R1', 10, 2)], [[0, 0, 20, 0]]);
+    const out = normalizeWires(base);
+    expect(out.wires).toHaveLength(2);
+    expect(out.wires.map((w) => [w.x1, w.y1, w.x2, w.y2]).sort((a, b) => a[0] - b[0])).toEqual([[0, 0, 10, 0], [10, 0, 20, 0]]);
+  });
+  it('merges two collinear wires that share an unburdened endpoint', () => {
+    const out = normalizeWires(sch([], [[0, 0, 10, 0], [10, 0, 20, 0]]));
+    expect(out.wires).toHaveLength(1);
+    expect(out.wires[0]).toMatchObject({ x1: 0, y1: 0, x2: 20, y2: 0 });
+  });
+  it('does not merge through a point where a part pin sits', () => {
+    const base = sch([P('GND', '', 10, 0, '')], [[0, 0, 10, 0], [10, 0, 20, 0]]);
+    const out = normalizeWires(base);
+    expect(out.wires).toHaveLength(2);
+  });
+  it('leaves an already-normalized schematic untouched (same reference)', () => {
+    const base = sch([], [[0, 0, 10, 0]]);
+    expect(normalizeWires(base)).toBe(base);
+  });
+});
+
+describe('moveItems rubber-banding', () => {
+  it('stretches a static wire attached to a moving pin, staying straight when possible', () => {
+    const r1 = P('R', 'R1', 0, 2);
+    const base = sch([r1], [[0, 0, -10, 0]]); // pin1 of R1 is at (0,0)
+    const out = moveItems(base, new Set([r1.id]), 5, 0);
+    expect(out.parts[0]).toMatchObject({ x: 5, y: 2 });
+    expect(out.wires).toHaveLength(1);
+    expect(out.wires[0]).toMatchObject({ x1: -10, y1: 0, x2: 5, y2: 0 });
+  });
+  it('adds a bend when the stretch is not axis-aligned', () => {
+    const r1 = P('R', 'R1', 0, 2);
+    const base = sch([r1], [[0, 0, 0, -10]]);
+    const out = moveItems(base, new Set([r1.id]), 5, 0);
+    expect(out.wires).toHaveLength(2);
+    const pts = out.wires.map((w) => [[w.x1, w.y1], [w.x2, w.y2]]);
+    expect(pts).toContainEqual([[0, -10], [5, -10]]);
+    expect(pts).toContainEqual([[5, -10], [5, 0]]);
+  });
+  it('translates a wire wholesale when both ends are moving together', () => {
+    const r1 = P('R', 'R1', 0, 2);
+    const r2 = P('R', 'R2', 0, 10);
+    const base = sch([r1, r2], [[0, 4, 0, 8]]); // wire connects R1's pin2 to R2's pin1
+    const out = moveItems(base, new Set([r1.id, r2.id]), 3, 0);
+    expect(out.wires).toHaveLength(1);
+    expect(out.wires[0]).toMatchObject({ x1: 3, y1: 4, x2: 3, y2: 8 });
+  });
+});
+
+describe('dragging a wire', () => {
+  it('moves a wire sideways and keeps its neighbours attached and orthogonal', () => {
+    const base = sch([], [[0, 0, 10, 0], [10, 0, 10, 8], [10, 8, 20, 8]]);
+    const mid = base.wires[1];
+    const out = moveItems(base, new Set([mid.id]), 4, 0);
+    // Direction is irrelevant to connectivity, so compare each wire with its ends sorted.
+    const segs = out.wires.map((w) => (w.x1 + w.y1 <= w.x2 + w.y2 ? [w.x1, w.y1, w.x2, w.y2] : [w.x2, w.y2, w.x1, w.y1]));
+    expect(segs).toContainEqual([14, 0, 14, 8]);
+    expect(segs).toContainEqual([0, 0, 14, 0]);
+    expect(segs).toContainEqual([14, 8, 20, 8]);
+    for (const w of out.wires) expect(w.x1 === w.x2 || w.y1 === w.y2).toBe(true);
+  });
+});
+
+describe('copy, paste, duplicate', () => {
+  const base = sch([P('R', 'R1', 0, 2), P('R', 'R2', 10, 2), P('GND', '', 20, 0, '')], [[0, 4, 10, 4]]);
+  it('gives pasted parts fresh ids and the next free designator, and shifts everything', () => {
+    const clip = copyItems(base, new Set([base.parts[0].id, base.wires[0].id]));
+    const out = pasteItems(base, clip, 2, 2);
+    expect(out.sch.parts).toHaveLength(4);
+    const added = out.sch.parts[3];
+    expect(added).toMatchObject({ kind: 'R', ref: 'R3', x: 2, y: 4, value: '1k' });
+    expect(new Set(out.sch.parts.map((p) => p.id)).size).toBe(4);
+    expect(out.sch.wires[1]).toMatchObject({ x1: 2, y1: 6, x2: 12, y2: 6 });
+    expect(out.ids).toHaveLength(2);
+    expect(out.ids).toContain(added.id);
+  });
+  it('does not give a ground symbol a designator', () => {
+    const out = pasteItems(base, copyItems(base, new Set([base.parts[2].id])), 1, 1);
+    expect(out.sch.parts[3]).toMatchObject({ kind: 'GND', ref: '' });
+  });
+  it('pasting twice stays unique and leaves the source untouched', () => {
+    const clip = copyItems(base, new Set([base.parts[0].id]));
+    const once = pasteItems(base, clip, 2, 2).sch;
+    const twice = pasteItems(once, clip, 4, 4).sch;
+    expect(twice.parts.map((p) => p.ref)).toEqual(['R1', 'R2', '', 'R3', 'R4']);
+    expect(base.parts).toHaveLength(3);
+  });
+});
+
+describe('removeWireSpan', () => {
+  it('deletes only the stretch between connection points, keeping the rest of the run', () => {
+    // A long wire with another wire's end landing at x=10 and a pin at x=20.
+    const base = sch([P('GND', '', 20, 0, '')], [[0, 0, 30, 0], [10, 0, 10, 6]]);
+    const run = base.wires[0];
+    const out = removeWireSpan(base, new Set([run.id]), { x: 15, y: 0 });
+    const segs = out.wires.map((w) => [w.x1, w.y1, w.x2, w.y2]);
+    expect(segs).toContainEqual([0, 0, 10, 0]);
+    expect(segs).toContainEqual([20, 0, 30, 0]);
+    expect(segs).toContainEqual([10, 0, 10, 6]);
+    expect(segs).toHaveLength(3);
+  });
+  it('removes a whole wire when nothing else touches it', () => {
+    const base = sch([], [[0, 0, 10, 0]]);
+    expect(removeWireSpan(base, new Set([base.wires[0].id]), { x: 5, y: 0 }).wires).toHaveLength(0);
+  });
+  it('does nothing when the point is not on a selected wire', () => {
+    const base = sch([], [[0, 0, 10, 0]]);
+    expect(removeWireSpan(base, new Set([base.wires[0].id]), { x: 5, y: 3 })).toBe(base);
+    expect(removeWireSpan(base, new Set(), { x: 5, y: 0 })).toBe(base);
+  });
+});
+
+describe('label positions', () => {
+  it('offsets accumulate, survive save and load, and do not touch the netlist', () => {
+    const base = sch([P('R', 'R1', 0, 2)], []);
+    const a = withLabelOffset(base, base.parts[0].id, 'ref', { x: 1, y: -2 });
+    const b = withLabelOffset(a, base.parts[0].id, 'ref', { x: 2, y: 0 });
+    expect(b.parts[0].refOffset).toEqual({ x: 3, y: -2 });
+    expect(b.parts[0].valueOffset).toBeUndefined();
+    const back = parseSchematic(JSON.stringify(b));
+    expect(back.parts[0].refOffset).toEqual({ x: 3, y: -2 });
+    expect(compile(b).netlist).toBe(compile(base).netlist);
   });
 });
 

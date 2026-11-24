@@ -10,8 +10,9 @@ import { IconDelete, IconFit, IconMirror, IconProbe, IconRedo, IconRotate, IconR
 import { Inspector } from './Inspector';
 import { MenuBar } from './Menus';
 import { Palette } from './Palette';
+import { QuickAdd } from './QuickAdd';
 import { SchematicCanvas, type Placing, type ProbeTarget, type Tool } from './SchematicCanvas';
-import { deleteItems, docReducer, loadSaved, parseSchematic, patchParts, rotated, saveLocal, type Doc } from './store';
+import { copyItems, deleteItems, docReducer, loadSaved, parseSchematic, pasteItems, patchParts, removeWireSpan, rotated, saveLocal, type Clipboard, type Doc } from './store';
 import { WaveformViewer, traceColor } from './WaveformViewer';
 
 const ANALYSIS_NAME = { tran: 'Transient', ac: 'AC sweep', dc: 'DC sweep', op: 'Operating point' } as const;
@@ -52,6 +53,9 @@ export function App() {
   const [zoom, setZoom] = useState(2);
   const [client] = useState(() => new SimClient(setEngine));
   const fileInput = useRef<HTMLInputElement>(null);
+  const [quickAdd, setQuickAdd] = useState(false);
+  const [waveOpen, setWaveOpen] = useState(true);
+  const clipboard = useRef<{ clip: Clipboard; pastes: number } | null>(null);
 
   useEffect(() => saveLocal(sch), [sch]);
   // Fetch the engine shortly after first paint so the first Run does not wait for 20 MB.
@@ -74,7 +78,7 @@ export function App() {
     say(client.state === 'ready' ? 'Simulating…' : 'Loading ngspice (about 20 MB, first run only)…');
     try {
       const r = await client.run(compiled.netlist, sch.analysis.kind);
-      setResult(r); setTab('wave');
+      setResult(r); setTab('wave'); setWaveOpen(true);
       if (!r.ok) { say(explain(r.messages[0]) ?? r.messages[0], true); return; }
       setTraces((old) => {
         const keep = old.filter((name) => r.vectors.some((v) => v.name === name));
@@ -94,6 +98,8 @@ export function App() {
   }, [busy, client, compiled, sch]);
 
   const stop = () => client.cancel();
+  const showWave = () => { setWaveOpen(true); setTab('wave'); };
+  const closeWave = () => { setWaveOpen(false); setTab((t) => (t === 'wave' ? 'netlist' : t)); };
 
   const toggleTrace = (name: string) => setTraces((t) => (t.includes(name) ? t.filter((x) => x !== name) : [...t, name]));
   const onProbe = (target: ProbeTarget) => {
@@ -103,12 +109,12 @@ export function App() {
       if (target.node === '0') { say('That net is ground: 0 V by definition.'); return; }
       const name = `v(${target.node})`;
       if (!result.vectors.some((v) => v.name === name)) { say(`No data for net "${target.node}". Run again: the schematic changed since the last run.`, true); return; }
-      toggleTrace(name); setTab('wave');
+      toggleTrace(name); showWave();
       return;
     }
     const name = currentNames(target.part).find((n) => result.vectors.some((v) => v.name === n));
     if (!name) { say(result.kind === 'ac' ? 'AC analysis saves node voltages only; probe a wire instead.' : `No current was saved for ${target.part.ref}. Run again.`, true); return; }
-    toggleTrace(name); setTab('wave');
+    toggleTrace(name); showWave();
   };
 
   const pick = (kind: Part['kind']) => { setPlacing({ kind, rot: 0, mirror: false }); setTool('place'); setSelected([]); };
@@ -122,6 +128,33 @@ export function App() {
     else if (selected.length) commit(patchParts(sch, selection, (p) => ({ mirror: !p.mirror })));
   };
   const del = () => { if (selected.length) { commit(deleteItems(sch, selection)); setSelected([]); } };
+
+  const copy = () => {
+    if (!selected.length) return false;
+    clipboard.current = { clip: copyItems(sch, selection), pastes: 0 };
+    say(`Copied ${selected.length} item${selected.length === 1 ? '' : 's'}`);
+    return true;
+  };
+  const cut = () => { if (copy()) del(); };
+  const paste = () => {
+    const c = clipboard.current;
+    if (!c) { say('Nothing to paste: copy something first.'); return; }
+    c.pastes += 1;
+    const out = pasteItems(sch, c.clip, 2 * c.pastes, 2 * c.pastes);
+    commit(out.sch); setSelected(out.ids); setTool('select'); setPlacing(null);
+  };
+  const duplicate = () => {
+    if (!selected.length) return;
+    const out = pasteItems(sch, copyItems(sch, selection), 2, 2);
+    commit(out.sch); setSelected(out.ids);
+  };
+  const delSegment = () => {
+    if (!cursor) return;
+    const next = removeWireSpan(sch, selection, cursor);
+    if (next === sch) { say('Hover over a selected wire to delete just that segment.'); return; }
+    commit(next); setSelected([]);
+    say('Deleted wire segment');
+  };
 
   const save = () => {
     const url = URL.createObjectURL(new Blob([JSON.stringify(sch, null, 2)], { type: 'application/json' }));
@@ -145,8 +178,14 @@ export function App() {
       else if (mod && key === 'y') { e.preventDefault(); dispatch({ type: 'redo' }); }
       else if (mod && key === 's') { e.preventDefault(); save(); }
       else if (e.key === 'F5' || (mod && e.key === 'Enter')) { e.preventDefault(); void run(); }
+      else if (mod && key === 'c') { if (copy()) e.preventDefault(); }
+      else if (mod && key === 'x') { e.preventDefault(); cut(); }
+      else if (mod && key === 'v') { e.preventDefault(); paste(); }
+      else if (mod && key === 'd') { e.preventDefault(); duplicate(); }
       else if (mod || e.altKey) return;
       else if (e.key === 'Escape') cancelTool();
+      else if (key === 'a') { e.preventDefault(); setQuickAdd(true); }
+      else if (e.shiftKey && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); delSegment(); }
       else if (key === 'w') { setTool('wire'); setPlacing(null); }
       else if (key === 'p') { setTool('probe'); setPlacing(null); }
       else if (key === 'r') rotate();
@@ -199,11 +238,18 @@ export function App() {
             { label: 'Undo', shortcut: 'Ctrl+Z', disabled: !doc.past.length, run: () => dispatch({ type: 'undo' }) },
             { label: 'Redo', shortcut: 'Ctrl+Y', disabled: !doc.future.length, run: () => dispatch({ type: 'redo' }) },
             { separator: true },
+            { label: 'Copy', shortcut: 'Ctrl+C', disabled: !selected.length, run: () => void copy() },
+            { label: 'Cut', shortcut: 'Ctrl+X', disabled: !selected.length, run: cut },
+            { label: 'Paste', shortcut: 'Ctrl+V', run: paste },
+            { label: 'Duplicate', shortcut: 'Ctrl+D', disabled: !selected.length, run: duplicate },
+            { separator: true },
             { label: 'Rotate', shortcut: 'R', disabled: !selected.length && tool !== 'place', run: rotate },
             { label: 'Mirror', shortcut: 'X', disabled: !selected.length && tool !== 'place', run: mirror },
             { label: 'Delete', shortcut: 'Del', disabled: !selected.length, run: del },
+            { label: 'Delete wire segment', shortcut: 'Shift+Del', disabled: !selected.length, run: delSegment },
           ] },
           { title: 'Place', items: [
+            { label: 'Add part…', shortcut: 'A', run: () => setQuickAdd(true) },
             { label: 'Wire', shortcut: 'W', run: () => { setTool('wire'); setPlacing(null); } },
             { label: 'Ground', run: () => pick('GND') },
             { label: 'Net label', run: () => pick('LABEL') },
@@ -215,7 +261,10 @@ export function App() {
             { label: 'Probe', shortcut: 'P', run: () => { setTool('probe'); setPlacing(null); } },
             { label: 'Show netlist', run: () => setTab('netlist') },
           ] },
-          { title: 'View', items: [{ label: 'Zoom to fit', shortcut: 'F', run: () => setFitToken((t) => t + 1) }] },
+          { title: 'View', items: [
+            { label: 'Zoom to fit', shortcut: 'F', run: () => setFitToken((t) => t + 1) },
+            { label: 'Show waveform', disabled: waveOpen && tab === 'wave', run: showWave },
+          ] },
         ]} />
         <span className="model-name">{sch.title}</span>
         <input ref={fileInput} type="file" accept=".json,application/json" hidden onChange={(e) => { void open(e.target.files?.[0]); e.target.value = ''; }} />
@@ -254,10 +303,13 @@ export function App() {
         <div className="dock-grip" onPointerDown={dragDock} />
         <div className="dock-titlerow">
           <div className="dock-tabs" role="tablist">
-            {(['wave', 'netlist', 'log'] as const).map((t) => (
-              <button key={t} type="button" role="tab" aria-selected={tab === t} className={`dock-tab${tab === t ? ' is-active' : ''}`} onClick={() => setTab(t)}>
-                {t === 'wave' ? 'Waveform' : t === 'netlist' ? 'Netlist' : 'ngspice log'}
-              </button>
+            {(['wave', 'netlist', 'log'] as const).filter((t) => t !== 'wave' || waveOpen).map((t) => (
+              <span key={t} className={`dock-tab${tab === t ? ' is-active' : ''}`}>
+                <button type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
+                  {t === 'wave' ? 'Waveform' : t === 'netlist' ? 'Netlist' : 'ngspice log'}
+                </button>
+                {t === 'wave' && <button type="button" className="dock-tab-close" aria-label="Close waveform tab" title="Close waveform tab" onClick={closeWave}>×</button>}
+              </span>
             ))}
           </div>
           {tab === 'wave' && result?.ok && result.kind !== 'op' && (
@@ -298,6 +350,8 @@ export function App() {
           ))}
         </div>
       </div>
+
+      {quickAdd && <QuickAdd onClose={() => setQuickAdd(false)} onPick={(kind) => { setQuickAdd(false); pick(kind); }} />}
 
       <div className="statusbar">
         <span className={`status-main${status.error ? ' is-error' : ''}`} role="status">{status.text}</span>
