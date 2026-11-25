@@ -58,7 +58,8 @@ in the browser, on a grading server, or in desktop ngspice.
 
 - Moving a part does not drag its wires along.
 - Device models are generic ones written for this project (`DGEN`, `NPN_GEN`, ...), not vendor parts.
-- The op-amp is ideal: no supply rails, so it never clips.
+- The plain op-amp is ideal and never clips. The one with supply pins clips at its rails but models no slew rate or output current limit.
+- `sqrt()` of a negative signal in a behavioural source stalls ngspice; the app stops the run after 60 s.
 - AC analysis plots voltages only (ngspice cannot save device currents there).
 - A slow network pays for the 20 MB engine on first load; there is no offline cache yet.
 

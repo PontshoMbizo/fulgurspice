@@ -5,7 +5,7 @@ import type { Part, Point, Schematic } from '../core/types';
 import { emptySchematic } from '../core/types';
 import { formatSI } from '../core/units';
 import { SimClient, type EngineState } from '../sim/client';
-import { explain, type SimResult } from '../sim/result';
+import { currentNames, explain, type SimResult } from '../sim/result';
 import { IconDelete, IconFit, IconMirror, IconProbe, IconRedo, IconRotate, IconRun, IconSelect, IconStop, IconUndo, IconWire } from './Icons';
 import { Inspector } from './Inspector';
 import { MenuBar } from './Menus';
@@ -24,19 +24,6 @@ const ANALYSIS_NAME = { tran: 'Transient', ac: 'AC sweep', dc: 'DC sweep', op: '
 const ENGINE_NAME: Record<EngineState, string> = { idle: 'ngspice: not loaded', loading: 'ngspice: loading…', ready: 'ngspice: ready', running: 'ngspice: running…' };
 
 const initDoc = (): Doc => ({ sch: loadSaved() ?? EXAMPLES[0].build(), past: [], future: [] });
-
-/** Names ngspice may have saved a part's current under, most specific first. */
-function currentNames(part: Part): string[] {
-  const ref = part.ref.toLowerCase();
-  switch (part.kind) {
-    case 'V': return [`i(${ref})`];
-    case 'OPAMP': return [`i(e_${ref})`];
-    case 'D': return [`i(@${ref}[id])`];
-    case 'NPN': case 'PNP': return [`i(@${ref}[ic])`];
-    case 'NMOS': case 'PMOS': return [`i(@${ref}[id])`];
-    default: return [`i(@${ref}[i])`, `i(@${ref}[c])`];
-  }
-}
 
 export function App() {
   const [doc, dispatch] = useReducer(docReducer, undefined, initDoc);
@@ -134,7 +121,8 @@ export function App() {
       if (r.messages.length) say(`${summary}, with warnings. ${explain(r.messages[0]) ?? r.messages[0]}`, true);
       else say(summary);
     } catch (err) {
-      say(err instanceof Error ? err.message : String(err), true);
+      const msg = err instanceof Error ? err.message : String(err);
+      say(explain(msg) ? `${msg}. ${explain(msg)}` : msg, true);
     } finally {
       setBusy(false);
     }

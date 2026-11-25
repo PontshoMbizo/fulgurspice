@@ -7,6 +7,13 @@ export type Rot = 0 | 90 | 180 | 270;
 export type PartKind =
   | 'R' | 'C' | 'L' | 'V' | 'I' | 'GND' | 'D' | 'NPN' | 'PNP' | 'NMOS' | 'PMOS' | 'OPAMP' | 'LABEL'
   /** A subcircuit's connection to the outside: only meaningful inside a subcircuit sheet. */
+  | 'ZENER' | 'LED' | 'POT' | 'SW' | 'VSW' | 'XFMR'
+  /** Dependent sources: voltage-, current-controlled voltage / current (SPICE E, G, F, H) */
+  | 'VCVS' | 'VCCS' | 'CCCS' | 'CCVS'
+  /** Behavioural source (SPICE B): V=expression or I=expression. */
+  | 'BSRC'
+  /** Op-amp with supply pins, which clips at the rails. */
+  | 'OPAMPS'
   | 'PORT'
   /** An instance of a user-defined subcircuit; `value` is the subcircuit's name. */
   | 'SUBCKT';

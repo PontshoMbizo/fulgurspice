@@ -12,6 +12,8 @@ export interface Device {
   kind: PartKind;
   /** pin name -> node name, as in the symbol table */
   nodes: Record<string, string>;
+  /** Behavioural source only: true for I=..., false for V=... */
+  current?: boolean;
 }
 
 export interface Finding {
@@ -22,15 +24,31 @@ export interface Finding {
 
 type Edge = [string, string];
 
-/** Branches whose voltage is fixed by the element itself (an ideal source, or an
- * inductor, which is a wire at DC). Two of these around a loop contradict each other. */
+/** Branches whose voltage is fixed by the element itself: an ideal source of any kind, or an
+ * inductor (a wire at DC). */
 function voltageEdges(d: Device): Edge[] {
   const n = d.nodes;
   switch (d.kind) {
     case 'V': return [[n['+'], n['-']]];
     case 'L': return [[n['1'], n['2']]];
-    case 'OPAMP': return [[n['out'], '0']];
+    case 'XFMR': return [[n['P1'], n['P2']], [n['S1'], n['S2']]];
+    case 'VCVS': case 'CCVS': return [[n['O+'], n['O-']]];
+    case 'BSRC': return d.current ? [] : [[n['+'], n['-']]];
+    case 'OPAMP': case 'OPAMPS': return [[n['out'], '0']];
     default: return [];
+  }
+}
+
+const isInductive = (d: Device) => d.kind === 'L' || d.kind === 'XFMR';
+
+/** The two nodes an ideal current source pushes current between, or null if the part is not one. */
+function currentSourceNodes(d: Device): Edge | null {
+  const n = d.nodes;
+  switch (d.kind) {
+    case 'I': return [n['+'], n['-']];
+    case 'VCCS': case 'CCCS': return [n['O+'], n['O-']];
+    case 'BSRC': return d.current ? [n['+'], n['-']] : null;
+    default: return null;
   }
 }
 
@@ -40,10 +58,13 @@ function conductEdges(d: Device): Edge[] {
   const n = d.nodes;
   switch (d.kind) {
     case 'R': return [[n['1'], n['2']]];
-    case 'V': case 'L': case 'OPAMP': return voltageEdges(d);
-    case 'D': return [[n['A'], n['K']]];
+    case 'V': case 'L': case 'XFMR': case 'VCVS': case 'CCVS': case 'BSRC': case 'OPAMP': case 'OPAMPS': return voltageEdges(d);
+    case 'D': case 'ZENER': case 'LED': return [[n['A'], n['K']]];
     case 'NPN': case 'PNP': return [[n['C'], n['E']], [n['B'], n['E']]];
     case 'NMOS': case 'PMOS': return [[n['D'], n['S']]];
+    case 'POT': return [[n['1'], n['W']], [n['W'], n['2']]];
+    // An open switch still has its off-resistance, so it never leaves a net floating on its own.
+    case 'SW': case 'VSW': return [[n['1'], n['2']]];
     // Unknown inside: assume it conducts between its pins, so it never causes a false alarm.
     case 'SUBCKT': { const v = Object.values(n); return v.slice(1).map((x): Edge => [v[0], x]); }
     default: return [];
@@ -75,28 +96,54 @@ const list = (names: string[]) => (names.length <= 3 ? names.join(', ') : `${nam
 export function topologyFindings(devices: Device[], opts: { loopsOnly?: boolean } = {}): Finding[] {
   const out: Finding[] = [];
 
-  // 1. A loop made only of voltage sources and inductors: Kirchhoff's voltage law
-  //    has no solution (or the currents in the loop are undetermined).
+  // 1. Loops of ideal voltage branches. Measured against ngspice: a loop of sources alone has
+  //    no solution (error). A loop that includes an inductor has no unique DC solution, but
+  //    ngspice recovers with a transient start and transient and AC results are right, so that
+  //    is a warning.
+  interface VEdge { a: string; b: string; dev: Device }
+  const vedges: VEdge[] = devices.flatMap((d) => voltageEdges(d).map(([a, b]) => ({ a, b, dev: d })));
+  const sources = vedges.filter((e) => !isInductive(e.dev)), coils = vedges.filter((e) => isInductive(e.dev));
   const vloop = new Groups();
-  for (const d of devices) {
-    for (const [a, b] of voltageEdges(d)) {
-      if (a === b) out.push({ level: 'error', partId: d.partId, message: `${d.ref} is shorted: both of its pins are on net ${a}. A source or inductor across a single net has no solution` });
-      else if (vloop.same(a, b)) out.push({ level: 'error', partId: d.partId, message: `${d.ref} closes a loop made only of voltage sources and inductors (nets ${a} and ${b} are already tied together by ideal sources). Kirchhoff's voltage law cannot hold: put a resistor in the loop` });
-      else vloop.union(a, b);
+  const adj = new Map<string, { to: string; e: VEdge }[]>();
+  const link = (e: VEdge) => {
+    for (const [x, y] of [[e.a, e.b], [e.b, e.a]] as const) adj.set(x, [...(adj.get(x) ?? []), { to: y, e }]);
+  };
+  for (const e of sources) {
+    if (e.a === e.b) out.push({ level: 'error', partId: e.dev.partId, message: `${e.dev.ref} is shorted: both of its pins are on net ${e.a}. A source across a single net has no solution` });
+    else if (vloop.same(e.a, e.b)) out.push({ level: 'error', partId: e.dev.partId, message: `${e.dev.ref} closes a loop made only of voltage sources (nets ${e.a} and ${e.b} are already tied together by ideal sources). Kirchhoff's voltage law cannot hold: put a resistor in the loop` });
+    else { vloop.union(e.a, e.b); link(e); }
+  }
+  const pathBetween = (from: string, to: string): VEdge[] | null => {
+    const prev = new Map<string, { from: string; e: VEdge } | null>([[from, null]]);
+    const queue = [from];
+    for (let i = 0; i < queue.length; i++) {
+      const node = queue[i];
+      if (node === to) break;
+      for (const { to: next, e } of adj.get(node) ?? []) if (!prev.has(next)) { prev.set(next, { from: node, e }); queue.push(next); }
     }
+    if (!prev.has(to)) return null;
+    const path: VEdge[] = [];
+    for (let at = to; prev.get(at); at = prev.get(at)!.from) path.push(prev.get(at)!.e);
+    return path;
+  };
+  for (const e of coils) {
+    const path = e.a === e.b ? [] : pathBetween(e.a, e.b);
+    if (e.a !== e.b && !path) { link(e); continue; }
+    const members = [...new Set([e.dev.ref, ...(path ?? []).map((x) => x.dev.ref)])];
+    out.push({ level: 'warning', partId: e.dev.partId, message: `${e.dev.ref} forms a loop with ideal voltage sources${members.length > 1 ? ` (${members.join(', ')})` : ''}. At DC an inductor is a short, so the operating point is undefined and ngspice falls back to a transient start. Transient and AC results are fine, but a DC operating point is not meaningful: add a small series resistor for a clean start` });
   }
 
   if (opts.loopsOnly) return out;
 
   // 2. Current-source cut-set: a part of the circuit joined to the rest only through
   //    ideal current sources. The currents must sum to zero or KCL fails.
-  const isrc = devices.filter((d) => d.kind === 'I');
+  const isrc = devices.filter((d) => currentSourceNodes(d) !== null);
   const flow = new Groups();
   for (const d of devices) for (const [a, b] of currentEdges(d)) flow.union(a, b);
   const cut = new Set<string>();
   const stranded = new Map<string, Device[]>();
   for (const d of isrc) {
-    const a = d.nodes['+'], b = d.nodes['-'];
+    const [a, b] = currentSourceNodes(d)!;
     if (flow.same(a, b)) continue; // both ends are in one lump: not a cut
     for (const end of [a, b]) {
       const root = flow.find(end);

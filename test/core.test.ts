@@ -6,6 +6,8 @@ import { emptySchematic, type Part, type Schematic } from '../src/core/types';
 import { pinPositions, toWorld } from '../src/core/symbols';
 import { topologyFindings, type Device } from '../src/core/rules';
 import { vectorLabel } from '../src/sim/result';
+import { formatSource, parseSource, waveProblem } from '../src/core/source';
+import { checkExpression, parsePot, parseSense, parseXfmr } from '../src/core/valuespec';
 import { addPart, addSubckt, copyItems, moveItems, normalizeAll, normalizeWires, parseSchematic, pasteItems, removeSubckt, removeWireSpan, sheetOf, subcktNameProblem, withSheet } from '../src/ui/store';
 import { renameSubckt, subcktPorts, syncInstances } from '../src/core/subckt';
 import { makeSubckt } from '../src/core/extract';
@@ -109,10 +111,21 @@ describe('topology rules', () => {
   });
   it('flags parallel voltage sources, a source across an inductor, and a shorted source', () => {
     expect(msgs([V('V1', 'a', '0'), V('V2', 'a', '0'), R('R1', 'a', '0')], 'error')[0]).toMatch(/V2 closes a loop/);
-    expect(msgs([V('V1', 'a', '0'), L('L1', 'a', '0')], 'error')[0]).toMatch(/L1 closes a loop/);
     expect(msgs([V('V1', 'a', 'a'), R('R1', 'a', '0')], 'error')[0]).toMatch(/V1 is shorted/);
-    // three-element loop, not just a pair
-    expect(msgs([V('V1', 'a', '0'), V('V2', 'b', 'a'), L('L1', 'b', '0')], 'error')[0]).toMatch(/L1 closes a loop/);
+    // three sources in a ring, not just a pair
+    expect(msgs([V('V1', 'a', '0'), V('V2', 'b', 'a'), V('V3', 'b', '0')], 'error')[0]).toMatch(/V3 closes a loop/);
+  });
+  it('only warns about a loop through an inductor, which ngspice recovers from, and names its members', () => {
+    for (const d of [[V('V1', 'a', '0'), L('L1', 'a', '0')], [V('V1', 'a', '0'), V('V2', 'b', 'a'), L('L1', 'b', '0')]]) {
+      expect(msgs(d, 'error')).toEqual([]);
+      expect(msgs(d, 'warning').join()).toMatch(/L1 forms a loop with ideal voltage sources \(L1, /);
+    }
+  });
+  it('treats an I= behavioural source as a current source and a V= one as a voltage source', () => {
+    const B = (ref: string, p: string, m: string, current: boolean): Device => ({ partId: ref, ref, kind: 'BSRC', current, nodes: { '+': p, '-': m } });
+    expect(msgs([V('V1', 'a', '0'), B('B1', 'a', '0', false)], 'error')[0]).toMatch(/B1 closes a loop/);
+    expect(msgs([V('V1', 'a', '0'), B('B1', 'a', '0', true)], 'error')).toEqual([]);
+    expect(msgs([B('B1', '0', 'n', true), I('I1', 'n', '0')], 'error')[0]).toMatch(/push current/);
   });
   it('flags current sources that feed a part with no other way back', () => {
     const series = msgs([I('I1', 'n', '0'), I('I2', '0', 'n'), R('R1', 'x', '0'), V('V1', 'x', '0')], 'error');
@@ -624,5 +637,46 @@ describe('vector labels', () => {
   it('reads like LTspice', () => {
     expect(vectorLabel('v(out)')).toBe('V(out)'); expect(vectorLabel('i(v1)')).toBe('I(V1)');
     expect(vectorLabel('i(@r1[i])')).toBe('I(R1)'); expect(vectorLabel('i(@d1[id])')).toBe('I(D1)'); expect(vectorLabel('i(@q1[ic])')).toBe('I(Q1:c)');
+  });
+});
+
+describe('Phase 4 values', () => {
+  const scope = { nets: new Set(['in', 'a']), vsources: new Set(['v1']) };
+  it('accepts expressions ngspice can run', () => {
+    for (const e of ['v(in)*2+1', 'V(IN)/1k', 'v(in,a)', 'i(v1)*1meg', 'v(in)>1 ? v(a) : -v(a)', '(v(in)+{k})^2', 'limit(v(in), 0, 1)', 'max(v(in),v(a))*sin(time)', 'v(in)**2', '!v(a) && v(in)<>1']) expect(checkExpression(e, scope), e).toBeNull();
+  });
+  it('refuses everything measured to make ngspice hang or misread', () => {
+    for (const e of ['', 'v(in)*', 'v(in)*(2', '*2', 'v(in,a,0)', 'abs()', 'pow(v(in))', 'v(in)>1 ? 1', 'v(in)/0', 'exp(v(in)', 'time*', '()', 'int(v(in))', 'atan2(v(in),1)', '4k7*v(in)', 'v(nope)', 'i(r1)', 'foo*2', 'v(in) v(a)', 'v(in']) expect(checkExpression(e, scope), e).not.toBeNull();
+  });
+  it('checks potentiometer, transformer and sense values', () => {
+    expect(parsePot('10k').ok).toBe(true); expect(parsePot('10k 1').ok).toBe(false); expect(parsePot('0 0.5').ok).toBe(false);
+    expect(parseXfmr('1 2').ok).toBe(true); expect(parseXfmr('1 2 1').ok).toBe(false); expect(parseXfmr('1').ok).toBe(false);
+    expect(parseSense('V1 10').ok).toBe(true); expect(parseSense('10').ok).toBe(false);
+  });
+  it('counts a net read by a behavioural source as connected, and refuses a missing sense source', () => {
+    const ok = compile(sch([P('V', 'V1', 0, 0, '1'), P('GND', '', 0, 2, ''), P('LABEL', '', 0, -2, 'in'), P('BSRC', 'B1', 10, 0, 'V=v(in)*2'), P('GND', '', 10, 2, ''), P('R', 'R1', 20, 0), P('GND', '', 20, 2, '')], [[10, -2, 20, -2]]));
+    expect(ok.issues.filter((i) => i.level === 'error')).toEqual([]);
+    const bad = compile(sch([P('CCCS', 'F1', 0, 0, 'V9 2'), P('R', 'R1', 10, 0), P('GND', '', 0, 2, '')], [[0, -2, 10, -2], [0, 2, 10, 2]]));
+    expect(bad.issues.map((i) => i.message).join()).toMatch(/no voltage source called V9/);
+  });
+});
+
+describe('source values', () => {
+  it('round-trips what the editor writes', () => {
+    for (const v of ['5', 'AC 1', 'DC 2 AC 1 90', 'SIN(0 1 1k)', 'PULSE(0 5 0 1u 1u 0.5m 1m)', 'PWL(0 0 1m 5)', 'DC 1 AC 1 SIN(0 {a} 1k)']) expect(formatSource(parseSource(v)!)).toBe(v);
+  });
+  it('reads the looser spellings ngspice accepts', () => {
+    expect(formatSource(parseSource('sine 0,1,1k')!)).toBe('SIN(0 1 1k)');
+    expect(formatSource(parseSource('dc 5')!)).toBe('5');
+  });
+  it('leaves what it does not model as free text', () => {
+    for (const v of ['EXP(0 5 0 1m)', 'SIN(0 1 1k) garbage', '5 5', 'SIN(0 1 1k', 'DC']) expect(parseSource(v), v).toBeNull();
+  });
+  it('zero-fills a gap, so later arguments keep their position', () => {
+    expect(formatSource({ dc: '', ac: null, wave: { type: 'SIN', args: ['0', '1', '1k', '', '', '90'] } })).toBe('SIN(0 1 1k 0 0 90)');
+  });
+  it('flags incomplete or unordered waveforms', () => {
+    for (const v of ['SIN()', 'SIN(0)', 'PULSE()', 'PWL(0 0 1m)', 'PWL(1m 5 0 0)']) expect(waveProblem(v), v).not.toBeNull();
+    for (const v of ['5', 'SIN(0 1)', 'PWL(0 0 1m 5)', 'EXP(0 1)']) expect(waveProblem(v), v).toBeNull();
   });
 });

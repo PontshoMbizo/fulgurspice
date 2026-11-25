@@ -38,6 +38,13 @@ Simulink-style block simulator backed by Scilab) and deliberately shares its des
   grader would hang. `compile()` refuses undefined `{names}` (`exprNames`) and rewrites parameter
   numbers through `spiceValue`; keep it that way. ngspice also silently ignores unknown instance
   parameters, so those are checked in `compile()` too.
+- **More measured hazards (Phase 4).** A behavioural source never returns for malformed expressions
+  (`v(a)*`, a missing bracket, wrong argument count, an unknown net, `/0`, `int()`, `atan2()`), so
+  `checkExpression` (`src/core/valuespec.ts`) is a full parser: widen it only after measuring the new
+  syntax. `sqrt()` of a signal that goes negative also hangs and cannot be caught statically, so any
+  server-side run needs its own timeout. The saved current of an `S` switch is wrong at the operating
+  point; the card adds a 0 V source to measure it. The op-amp models clamp their pole node (`Bclamp`):
+  test clipped waveforms over time, not only their peaks.
 - **ngspice has no `.step`** (it says "unimplemented dot command"). Sweeps run the netlist once per value with
   `.param NAME=value` placed last (the last `.param` wins, measured) and merge the runs: `mergeSweep`.
 - `.meas` results come back only in the engine log; a `.meas` that cannot be evaluated is an error *line*

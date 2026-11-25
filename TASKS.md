@@ -39,9 +39,10 @@
 
 ## Phase 4 — models and parts
 - [ ] Real part models (1N4148, 2N3904/3906, 2N7000, LM358, TL072): check each vendor licence first
-- [ ] Op-amp with supply pins and rail clipping
-- [ ] More parts: potentiometer, switch, transformer, zener and LED symbols, controlled sources (E/G/F/H), behavioural source (B)
-- [ ] Source editor dialog (SIN / PULSE / PWL / AC fields) in place of free text
+- [x] **DONE** Op-amp with supply pins and rail clipping (`OPAMP_RAIL`, `OPAMP_RR`; no slew-rate or current limit)
+- [x] **DONE** More parts: potentiometer, switches (manual and voltage controlled), transformer, zener and LED symbols, controlled sources (E/G/F/H), behavioural source (B); each checked against ngspice (`test/parts.test.ts`)
+- [x] **DONE** Source editor (DC / SIN / PULSE / PWL / AC fields) in the Inspector, beside the free-text value
+- [ ] Phase 4 follow-ups: example circuits for the new parts; centre-tapped transformer; EXP / SFFM in the source editor
 
 ## Phase 5 — scope.io integration
 - [ ] Embed API: mount in an iframe / as a component with a template schematic and locked parts (mirror fulgurlab's `docs/embedding.md`)

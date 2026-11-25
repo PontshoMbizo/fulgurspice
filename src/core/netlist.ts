@@ -10,6 +10,7 @@ import { pointKey } from './geometry';
 import { topologyFindings, type Device } from './rules';
 import { dotParamNames, exprNames, formatParams, parseParams, parseSweep } from './params';
 import { subcktPorts } from './subckt';
+import { DIGIT_LETTER_DIGIT, parseBehavioural, referencedNets } from './valuespec';
 import { MODELS, SUBCKT_NAME, pinPositions, symbolFor } from './symbols';
 import { parseSI, toSpice } from './units';
 
@@ -167,6 +168,8 @@ function analyseSheet(sheetIn: Sheet, mode: Mode, defs: Map<string, Subckt>, sco
   }
 
   const refs = new Map<string, Part>();
+  // What a behavioural expression may refer to: the nets and voltage sources of this sheet.
+  const exprScope = { nets: new Set([...rootName.values()].map((n) => n.toLowerCase())), vsources: new Set(sheet.parts.filter((q) => q.kind === 'V').map((q) => q.ref.toLowerCase())) };
   for (const p of devices) {
     const def = symbolFor(p);
     const ref = p.ref.toUpperCase();
@@ -177,6 +180,10 @@ function analyseSheet(sheetIn: Sheet, mode: Mode, defs: Map<string, Subckt>, sco
     // An undefined {name} makes ngspice spin forever, so refuse it here, where the cause can be named.
     const unknown = exprNames(p.value).filter((n) => !scope.has(n));
     if (unknown.length) issues.push({ level: 'error', message: `${p.ref}: ${p.value.trim()} uses ${unknown.join(', ')}, which ${unknown.length === 1 ? 'is' : 'are'} not defined. Add ${unknown.length === 1 ? 'it' : 'them'} as subcircuit parameters, or with .param in the SPICE directives`, partId: p.id });
+    const why = def.check?.(p, { parts: sheet.parts, scope: exprScope });
+    if (why) issues.push({ level: 'error', message: why, partId: p.id });
+    // ngspice reads 4k7 as 4k without a word (LTspice habit), so refuse it in free-text source values.
+    if ((p.kind === 'V' || p.kind === 'I') && DIGIT_LETTER_DIGIT.test(` ${p.value}`)) issues.push({ level: 'error', message: `${p.ref}: "${p.value.trim()}" has a number written like 4k7, which ngspice reads as 4k. Write 4.7k`, partId: p.id });
     if (!p.value.trim()) issues.push({ level: 'error', message: `${p.ref} has no value`, partId: p.id });
     else if (p.kind === 'R' || p.kind === 'C' || p.kind === 'L') {
       const v = parseSI(p.value);
@@ -201,13 +208,15 @@ function analyseSheet(sheetIn: Sheet, mode: Mode, defs: Map<string, Subckt>, sco
 
   const devicePinsOnNode = new Map<string, number>();
   for (const { part, k } of pins) if (symbolFor(part).card) devicePinsOnNode.set(nodeAt(k), (devicePinsOnNode.get(nodeAt(k)) ?? 0) + 1);
+  // A behavioural source reads nets by name, which uses them as much as a pin does.
+  const readNets = new Set(devices.filter((p) => p.kind === 'BSRC').flatMap((p) => { const r = parseBehavioural(p.value); return r.ok ? referencedNets(r.expr) : []; }));
   // A port's net continues outside the subcircuit, so a pin that only meets a port is not dangling.
   const portNets = new Set(portKeys.map((q) => nodeAt(q.k)));
   let dangling = false;
   for (const { part, pin, k } of pins) {
     if (!symbolFor(part).card) continue;
     const node = nodeAt(k);
-    if (node !== '0' && !portNets.has(node) && devicePinsOnNode.get(node) === 1) {
+    if (node !== '0' && !portNets.has(node) && !readNets.has(node.toLowerCase()) && devicePinsOnNode.get(node) === 1) {
       dangling = true;
       issues.push({ level: 'error', message: `${part.ref} pin ${pin.name} is not connected to anything`, partId: part.id, at: { x: pin.x, y: pin.y } });
     }
@@ -227,7 +236,7 @@ function analyseSheet(sheetIn: Sheet, mode: Mode, defs: Map<string, Subckt>, sco
   // subcircuit has no ground of its own, so only the voltage-loop check applies.
   if (!dangling && (sub || taken.has('0'))) {
     const topo: Device[] = devices.map((p) => ({
-      partId: p.id, ref: p.ref, kind: p.kind,
+      partId: p.id, ref: p.ref, kind: p.kind, current: p.kind === 'BSRC' && /^\s*i\s*=/i.test(p.value),
       nodes: Object.fromEntries(symbolFor(p).pins.map((pin) => [pin.name, pinNode.get(`${p.id}:${pin.name}`)!])),
     }));
     issues.push(...topologyFindings(topo, { loopsOnly: sub }));

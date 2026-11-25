@@ -1,33 +1,15 @@
 // Right-hand panel: the selected part's properties, or the simulation setup when
 // nothing is selected. The rule-check list is always visible underneath.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Compiled } from '../core/netlist';
 import { symbolFor } from '../core/symbols';
 import { subcktPorts } from '../core/subckt';
 import { parseSweep } from '../core/params';
 import type { Analysis, Schematic } from '../core/types';
 import { patchParts } from './store';
-
-/** Text field that commits on blur or Enter, so typing a value is one undo step. */
-function Field({ label, value, hint, mono, onCommit }: { label: string; value: string; hint?: string; mono?: boolean; onCommit: (v: string) => void }) {
-  const [text, setText] = useState(value);
-  useEffect(() => setText(value), [value]);
-  const cancelled = useRef(false);
-  const commit = () => { if (cancelled.current) { cancelled.current = false; return; } if (text !== value) onCommit(text); };
-  return (
-    <label className="param">
-      <span>{label}</span>
-      <input className={mono ? 'num' : undefined} value={text} spellCheck={false} onChange={(e) => setText(e.target.value)} onBlur={commit}
-        onKeyDown={(e) => {
-          // Enter only blurs: the blur handler commits, so one edit is exactly one undo step.
-          if (e.key === 'Enter') e.currentTarget.blur();
-          else if (e.key === 'Escape') { cancelled.current = true; setText(value); e.currentTarget.blur(); }
-        }} />
-      {hint && <small>{hint}</small>}
-    </label>
-  );
-}
+import { Field } from './Field';
+import { SourceEditor } from './SourceEditor';
 
 function Directives({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
   const [text, setText] = useState(value);
@@ -128,6 +110,7 @@ export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRota
             <legend>Properties</legend>
             {def.prefix && <Field label="Reference" value={part.ref} mono onCommit={(v) => onCommit(patchParts(sch, selection, () => ({ ref: v.trim() })))} />}
             {def.valueLabel && <Field label={def.valueLabel} value={part.value} hint={def.valueHint} mono onCommit={(v) => onCommit(patchParts(sch, selection, () => ({ value: v })))} />}
+            {(part.kind === 'V' || part.kind === 'I') && <SourceEditor key={part.id} value={part.value} unit={part.kind === 'V' ? 'V' : 'A'} onCommit={(v) => onCommit(patchParts(sch, selection, () => ({ value: v })))} />}
             {part.kind === 'SUBCKT' && <Field label="Parameters" value={part.params ?? ''} mono hint="Override defaults, e.g. R=2k C=47n" onCommit={(v) => onCommit(patchParts(sch, selection, () => ({ params: v.trim() || undefined })))} />}
             {editing !== null && part.kind !== 'PORT' && (
               <label className="check" title="Drawn and simulated when this sheet is run on its own, but not part of the subcircuit">

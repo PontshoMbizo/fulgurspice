@@ -4,7 +4,9 @@
 
 import type { Part, PartKind, Point } from './types';
 import { formatParams, parseParams } from './params';
-import { spiceValue } from './units';
+import { checkExpression, gainText, parseBehavioural, parsePot, parseSense, parseSwitch, parseXfmr, potResistances, type ExprScope } from './valuespec';
+import { parseSI, spiceValue, toSpice } from './units';
+import { waveProblem } from './source';
 
 export interface Pin { name: string; x: number; y: number }
 
@@ -27,8 +29,10 @@ export interface SymbolDef {
   /** What the value field means, shown in the inspector. */
   valueLabel: string;
   valueHint?: string;
-  /** SPICE line for this part. `n` holds node names in pin order. Null = no card. */
+  /** SPICE line(s) for this part, joined by newlines. `n` holds node names in pin order. Null = no card. */
   card: ((part: Part, n: string[]) => string) | null;
+  /** Problems with this part's value that the netlister should report, or null. */
+  check?: (part: Part, ctx: { parts: Part[]; scope: ExprScope }) => string | null;
 }
 
 const circle = (cx: number, cy: number, r: number) =>
@@ -36,6 +40,26 @@ const circle = (cx: number, cy: number, r: number) =>
 
 const TWO_PIN: Pin[] = [{ name: '1', x: 0, y: -2 }, { name: '2', x: 0, y: 2 }];
 const model = (p: Part) => p.value.trim().replace(/\s+/g, '_') || 'MISSING_MODEL';
+
+// Shared pieces of the dependent-source symbols: a diamond, the +/- or arrow inside it.
+const DIAMOND = 'M0 -2V-1.5M0 1.5V2M0 -1.5L1.5 0L0 1.5L-1.5 0Z';
+const PLUS_MINUS = 'M-0.25 -0.8H0.25M0 -1.05V-0.55M-0.25 0.8H0.25';
+const ARROW = 'M0 0.8V-0.6';
+// Marks which control pin is C+.
+const CONTROL_PLUS = 'M-1.85 -1.35H-1.55M-1.7 -1.5V-1.2';
+const ARROW_HEAD = 'M0 -1L-0.25 -0.5H0.25Z';
+
+const isNumber = (v: string) => parseSI(v) !== null || /^\{[^{}\s]+\}$/.test(v.trim());
+
+/** F and H name a voltage source on the same sheet; ngspice measures its current. */
+function senseProblem(p: Part, parts: Part[]): string | null {
+  const r = parseSense(p.value);
+  if (!r.ok) return `${p.ref}: ${r.error}`;
+  if (!parts.some((q) => q.kind === 'V' && q.ref.toUpperCase() === r.source.toUpperCase())) {
+    return `${p.ref}: there is no voltage source called ${r.source} on this sheet. Current-controlled sources measure the current through a voltage source (use a 0 V source as an ammeter)`;
+  }
+  return null;
+}
 
 export const SYMBOLS: Record<PartKind, SymbolDef> = {
   R: {
@@ -64,6 +88,7 @@ export const SYMBOLS: Record<PartKind, SymbolDef> = {
     defaultValue: 'SIN(0 1 1k)', valueLabel: 'Value',
     valueHint: '5 · SIN(offset amp freq) · PULSE(v1 v2 delay rise fall width period) · AC 1',
     card: (p, n) => `V${p.ref.slice(1)} ${n[0]} ${n[1]} ${spiceValue(p.value)}`,
+    check: (p) => { const why = waveProblem(p.value); return why ? `${p.ref}: ${why}` : null; },
   },
   I: {
     kind: 'I', label: 'Current source', group: 'Sources', prefix: 'I',
@@ -71,6 +96,7 @@ export const SYMBOLS: Record<PartKind, SymbolDef> = {
     path: `M0 -2V-1M0 1V2M0 -0.6V0.6${circle(0, 0, 1)}`, solid: 'M0 0.7L-0.25 0.2H0.25Z', box: [-1, -2, 1, 2],
     defaultValue: '1m', valueLabel: 'Value', valueHint: 'Flows from the top pin through the source to the bottom pin',
     card: (p, n) => `I${p.ref.slice(1)} ${n[0]} ${n[1]} ${spiceValue(p.value)}`,
+    check: (p) => { const why = waveProblem(p.value); return why ? `${p.ref}: ${why}` : null; },
   },
   GND: {
     kind: 'GND', label: 'Ground', group: 'Connectivity', prefix: '', pins: [{ name: '0', x: 0, y: 0 }],
@@ -94,6 +120,115 @@ export const SYMBOLS: Record<PartKind, SymbolDef> = {
     path: '', box: [-2, -2, 2, 2],
     defaultValue: '', valueLabel: 'Subcircuit', valueHint: 'Name of a subcircuit defined in this schematic',
     card: (p, n) => [`X${p.ref.slice(1)}`, ...n, p.value.trim().replace(/\s+/g, '_'), formatParams(parseParams(p.params).items)].filter(Boolean).join(' '),
+  },
+  ZENER: {
+    kind: 'ZENER', label: 'Zener diode', group: 'Semiconductors', prefix: 'D',
+    pins: [{ name: 'A', x: 0, y: -2 }, { name: 'K', x: 0, y: 2 }],
+    path: 'M0 -2V-0.5M0 0.5V2M-0.6 -0.5H0.6L0 0.5ZM-0.9 0.2L-0.6 0.5H0.6L0.9 0.8', box: [-0.9, -2, 0.9, 2],
+    defaultValue: 'ZENER_5V1', valueLabel: 'Model', valueHint: 'Built in: ZENER_5V1 (breaks down at 5.1 V)',
+    card: (p, n) => `D${p.ref.slice(1)} ${n[0]} ${n[1]} ${model(p)}`,
+  },
+  LED: {
+    kind: 'LED', label: 'LED', group: 'Semiconductors', prefix: 'D',
+    pins: [{ name: 'A', x: 0, y: -2 }, { name: 'K', x: 0, y: 2 }],
+    path: 'M0 -2V-0.5M0 0.5V2M-0.6 -0.5H0.6L0 0.5ZM-0.6 0.5H0.6M0.9 -0.2L1.6 -0.9M1.2 -0.9H1.6V-0.5M1.1 0.3L1.8 -0.4M1.4 -0.4H1.8V0', box: [-0.6, -2, 1.9, 2],
+    defaultValue: 'LED_RED', valueLabel: 'Model', valueHint: 'Built in: LED_RED (about 1.8 V at 10 mA)',
+    card: (p, n) => `D${p.ref.slice(1)} ${n[0]} ${n[1]} ${model(p)}`,
+  },
+  POT: {
+    kind: 'POT', label: 'Potentiometer', group: 'Passive', prefix: 'RV',
+    pins: [{ name: '1', x: 0, y: -2 }, { name: '2', x: 0, y: 2 }, { name: 'W', x: -2, y: 0 }],
+    path: 'M0 -2V-1M0 1V2M-0.4 -1H0.4V1H-0.4ZM-2 0H-0.7', solid: 'M-0.5 0L-1 -0.25V0.25Z', box: [-2, -2, 0.6, 2],
+    defaultValue: '10k 0.5', valueLabel: 'Resistance, wiper', valueHint: 'e.g. 10k 0.3: wiper 0 to 1, measured from pin 1',
+    card: (p, n) => {
+      const r = parsePot(p.value);
+      if (!r.ok) return `* ${p.ref}: ${r.error}`;
+      const [a, b] = potResistances(r);
+      return `R_${p.ref}_1 ${n[0]} ${n[2]} ${a}\nR_${p.ref}_2 ${n[2]} ${n[1]} ${b}`;
+    },
+    check: (p) => { const r = parsePot(p.value); return r.ok ? null : `${p.ref}: ${r.error}`; },
+  },
+  SW: {
+    kind: 'SW', label: 'Switch (open or closed)', group: 'Passive', prefix: 'SW',
+    pins: TWO_PIN,
+    path: 'M0 -2V-1M0 1V2M0 1L0.8 -0.8M-0.15 -1H0.15M-0.15 1H0.15', box: [-0.3, -2, 0.9, 2],
+    defaultValue: 'closed', valueLabel: 'State', valueHint: 'closed or open (1 mΩ or 1 GΩ)',
+    card: (p, n) => `R_${p.ref} ${n[0]} ${n[1]} ${parseSwitch(p.value) === false ? '1G' : '1m'}`,
+    check: (p) => (parseSwitch(p.value) === null ? `${p.ref}: the state must be closed or open` : null),
+  },
+  VSW: {
+    kind: 'VSW', label: 'Switch (voltage controlled)', group: 'Passive', prefix: 'S',
+    pins: [{ name: '1', x: 0, y: -2 }, { name: '2', x: 0, y: 2 }, { name: 'C+', x: -3, y: -1 }, { name: 'C-', x: -3, y: 1 }],
+    path: 'M0 -2V-1M0 1V2M0 1L0.8 -0.8M-0.15 -1H0.15M-0.15 1H0.15M-3 -1H-1.6M-3 1H-1.6M-1.6 -1.6H-0.8V1.6H-1.6ZM-2.45 -1.35H-2.15M-2.3 -1.5V-1.2', box: [-3, -2, 0.9, 2],
+    defaultValue: 'SW_GEN', valueLabel: 'Model', valueHint: 'Built in: SW_GEN, closed above 2.5 V across C+ and C-',
+    // ngspice saves a wrong current for an S element at the operating point (measured: the off
+    // value while on), so a 0 V source in series measures it.
+    card: (p, n) => `S${p.ref.slice(1)} ${n[0]} sense_${p.ref}_ ${n[2]} ${n[3]} ${model(p)}\nV_${p.ref} sense_${p.ref}_ ${n[1]} 0`,
+  },
+  XFMR: {
+    kind: 'XFMR', label: 'Transformer', group: 'Passive', prefix: 'T',
+    pins: [{ name: 'P1', x: -2, y: -2 }, { name: 'P2', x: -2, y: 2 }, { name: 'S1', x: 2, y: -2 }, { name: 'S2', x: 2, y: 2 }],
+    path: 'M-2 -2H-0.5V-1.2a0.3 0.3 0 0 1 0 0.6a0.3 0.3 0 0 1 0 0.6a0.3 0.3 0 0 1 0 0.6a0.3 0.3 0 0 1 0 0.6V2H-2M2 -2H0.5V-1.2a0.3 0.3 0 0 0 0 0.6a0.3 0.3 0 0 0 0 0.6a0.3 0.3 0 0 0 0 0.6a0.3 0.3 0 0 0 0 0.6V2H2M-0.08 -1.3V1.3M0.08 -1.3V1.3',
+    solid: 'M-1.5 -1.6a0.1 0.1 0 1 0 0.2 0a0.1 0.1 0 1 0 -0.2 0M1.3 -1.6a0.1 0.1 0 1 0 0.2 0a0.1 0.1 0 1 0 -0.2 0', box: [-2, -2, 2, 2],
+    defaultValue: '1 1', valueLabel: 'Lp, ratio, k', valueHint: 'Primary inductance, secondary/primary turns ratio, coupling (default 0.999). e.g. 1 2',
+    card: (p, n) => {
+      const r = parseXfmr(p.value);
+      if (!r.ok) return `* ${p.ref}: ${r.error}`;
+      return `L_${p.ref}_p ${n[0]} ${n[1]} ${toSpice(r.lp)}\nL_${p.ref}_s ${n[2]} ${n[3]} ${toSpice(r.lp * r.ratio * r.ratio)}\nK_${p.ref} L_${p.ref}_p L_${p.ref}_s ${toSpice(r.k)}`;
+    },
+    check: (p) => { const r = parseXfmr(p.value); return r.ok ? null : `${p.ref}: ${r.error}`; },
+  },
+  VCVS: {
+    kind: 'VCVS', label: 'Voltage-controlled voltage source (E)', group: 'Sources', prefix: 'E',
+    pins: [{ name: 'O+', x: 0, y: -2 }, { name: 'O-', x: 0, y: 2 }, { name: 'C+', x: -2, y: -1 }, { name: 'C-', x: -2, y: 1 }],
+    path: `${DIAMOND}M-2 -1H-0.5M-2 1H-0.5${CONTROL_PLUS}${PLUS_MINUS}`, box: [-2, -2, 1.5, 2],
+    defaultValue: '10', valueLabel: 'Gain (V/V)', valueHint: 'Output voltage = gain × (V(C+) − V(C−))',
+    card: (p, n) => `E${p.ref.slice(1)} ${n[0]} ${n[1]} ${n[2]} ${n[3]} ${spiceValue(p.value)}`,
+    check: (p) => (isNumber(p.value) ? null : `${p.ref}: the gain must be a number`),
+  },
+  VCCS: {
+    kind: 'VCCS', label: 'Voltage-controlled current source (G)', group: 'Sources', prefix: 'G',
+    pins: [{ name: 'O+', x: 0, y: -2 }, { name: 'O-', x: 0, y: 2 }, { name: 'C+', x: -2, y: -1 }, { name: 'C-', x: -2, y: 1 }],
+    path: `${DIAMOND}M-2 -1H-0.5M-2 1H-0.5${CONTROL_PLUS}${ARROW}`, solid: ARROW_HEAD, box: [-2, -2, 1.5, 2],
+    defaultValue: '1m', valueLabel: 'Transconductance (S)', valueHint: 'Output current = gain × (V(C+) − V(C−)), flowing O+ to O−',
+    card: (p, n) => `G${p.ref.slice(1)} ${n[0]} ${n[1]} ${n[2]} ${n[3]} ${spiceValue(p.value)}`,
+    check: (p) => (isNumber(p.value) ? null : `${p.ref}: the transconductance must be a number`),
+  },
+  CCCS: {
+    kind: 'CCCS', label: 'Current-controlled current source (F)', group: 'Sources', prefix: 'F',
+    pins: [{ name: 'O+', x: 0, y: -2 }, { name: 'O-', x: 0, y: 2 }],
+    path: `${DIAMOND}${ARROW}`, solid: ARROW_HEAD, box: [-1.5, -2, 1.5, 2],
+    defaultValue: 'V1 10', valueLabel: 'Sense source, gain', valueHint: 'The voltage source whose current controls this, then the gain: V1 10',
+    card: (p, n) => { const r = parseSense(p.value); return r.ok ? `F${p.ref.slice(1)} ${n[0]} ${n[1]} ${r.source.toUpperCase()} ${gainText(r.gain)}` : `* ${p.ref}: ${r.error}`; },
+    check: (p, ctx) => senseProblem(p, ctx.parts),
+  },
+  CCVS: {
+    kind: 'CCVS', label: 'Current-controlled voltage source (H)', group: 'Sources', prefix: 'H',
+    pins: [{ name: 'O+', x: 0, y: -2 }, { name: 'O-', x: 0, y: 2 }],
+    path: `${DIAMOND}${PLUS_MINUS}`, box: [-1.5, -2, 1.5, 2],
+    defaultValue: 'V1 1k', valueLabel: 'Sense source, transresistance', valueHint: 'The voltage source whose current controls this, then volts per amp: V1 1k',
+    card: (p, n) => { const r = parseSense(p.value); return r.ok ? `H${p.ref.slice(1)} ${n[0]} ${n[1]} ${r.source.toUpperCase()} ${gainText(r.gain)}` : `* ${p.ref}: ${r.error}`; },
+    check: (p, ctx) => senseProblem(p, ctx.parts),
+  },
+  BSRC: {
+    kind: 'BSRC', label: 'Behavioural source (B)', group: 'Sources', prefix: 'B',
+    pins: [{ name: '+', x: 0, y: -2 }, { name: '-', x: 0, y: 2 }],
+    path: `${DIAMOND}M-0.8 0.1C-0.5 -0.5 -0.3 -0.5 0 0S0.5 0.6 0.8 -0.1`, box: [-1.5, -2, 1.5, 2],
+    defaultValue: 'V=v(in)*2', valueLabel: 'Expression', valueHint: 'V=… or I=…; nets by name, e.g. V=v(in)*2+1 or I=v(a)/1k',
+    card: (p, n) => { const r = parseBehavioural(p.value); return r.ok ? `B${p.ref.slice(1)} ${n[0]} ${n[1]} ${r.kind}=${r.expr}` : `* ${p.ref}: ${r.error}`; },
+    check: (p, ctx) => {
+      const r = parseBehavioural(p.value);
+      if (!r.ok) return `${p.ref}: ${r.error}`;
+      const why = checkExpression(r.expr, ctx.scope);
+      return why ? `${p.ref}: ${why}` : null;
+    },
+  },
+  OPAMPS: {
+    kind: 'OPAMPS', label: 'Op-amp with supplies', group: 'Semiconductors', prefix: 'U',
+    pins: [{ name: '+', x: -3, y: 1 }, { name: '-', x: -3, y: -1 }, { name: 'out', x: 3, y: 0 }, { name: 'V+', x: 0, y: -3 }, { name: 'V-', x: 0, y: 3 }],
+    path: 'M-3 -1H-2M-3 1H-2M2 0H3M-1.75 -1H-1.25M-1.75 1H-1.25M-1.5 0.75V1.25M0 -3V-1M0 3V1', body: 'M-2 -2L2 0L-2 2Z', box: [-3, -3, 3, 3],
+    defaultValue: 'OPAMP_RAIL', valueLabel: 'Model', valueHint: 'Built in: OPAMP_RAIL (swings to 1.5 V inside the rails), OPAMP_RR (rail to rail). 100 dB, 1 MHz',
+    card: (p, n) => `X_${p.ref} ${n.join(' ')} ${model(p)}`,
   },
   D: {
     kind: 'D', label: 'Diode', group: 'Semiconductors', prefix: 'D',
@@ -144,8 +279,26 @@ export const SYMBOLS: Record<PartKind, SymbolDef> = {
   },
 };
 
+/** An op-amp that clips: gain stage, a 10 Hz pole (1 MHz gain-bandwidth), and an output held
+ * `headroom / 2` volts inside each rail. The limit comes after the pole: clipping before it would
+ * turn the part into a slew limiter (measured). Bclamp holds the pole node itself at the limit;
+ * letting it run past, even to a few times the swing, delays recovery from saturation (measured:
+ * 0.8 V error at 1 kHz), and unclamped it stayed on the rail long after the input reversed. */
+function railOpamp(name: string, headroom: number): string {
+  const mid = '(v(vcc)+v(vee))/2', half = `max(v(vcc)-v(vee)-${headroom},1m)/2`;
+  const hi = `(${mid}+${half})`, lo = `(${mid}-${half})`;
+  return [
+    `.subckt ${name} inp inn out vcc vee`, 'Rin inp inn 10meg', 'Eg g 0 inp inn 100k', 'Rp g y 1k', 'Cp y 0 15.9u',
+    `Bclamp y 0 I=1k*(max(v(y)-${hi},0)+min(v(y)-${lo},0))`,
+    `Blim o 0 V=min(max(v(y),${lo}),${hi})`, 'Rout o out 50', `.ends ${name}`,
+  ].join('\n');
+}
+
 /** Generic device models, written for this project (not vendor data). Emitted only when a part uses them. */
 export const MODELS: Record<string, string> = {
+  SW_GEN: '.model SW_GEN SW(Vt=2.5 Vh=0.2 Ron=1m Roff=1G)',
+  OPAMP_RAIL: railOpamp('OPAMP_RAIL', 3),
+  OPAMP_RR: railOpamp('OPAMP_RR', 0),
   DGEN: '.model DGEN D(Is=1e-14 N=1 Rs=0.5 Cjo=2p Tt=5n Bv=100)',
   LED_RED: '.model LED_RED D(Is=1e-18 N=2 Rs=2 Cjo=20p Bv=5)',
   ZENER_5V1: '.model ZENER_5V1 D(Is=1e-14 N=1 Rs=1 Bv=5.1 Ibv=5m Cjo=50p)',
@@ -190,9 +343,14 @@ export function subcktSymbol(ports: string[]): SymbolDef {
   return def;
 }
 
+const CLOSED_SWITCH: SymbolDef = { ...SYMBOLS.SW, path: 'M0 -2V-1M0 1V2M0 1L0.35 -0.9L0 -1M-0.15 -1H0.15M-0.15 1H0.15' };
+
 /** The symbol for a placed part. Fixed for most kinds; built from `ports` for a subcircuit instance. */
-export function symbolFor(part: Pick<Part, 'kind' | 'ports'>): SymbolDef {
-  return part.kind === 'SUBCKT' ? subcktSymbol(part.ports ?? []) : SYMBOLS[part.kind];
+export function symbolFor(part: Pick<Part, 'kind' | 'ports'> & { value?: string }): SymbolDef {
+  if (part.kind === 'SUBCKT') return subcktSymbol(part.ports ?? []);
+  // A switch is drawn in the state its value says.
+  if (part.kind === 'SW' && parseSwitch(part.value ?? '') !== false) return CLOSED_SWITCH;
+  return SYMBOLS[part.kind];
 }
 
 export function pinPositions(part: Part): (Pin & Point)[] {
