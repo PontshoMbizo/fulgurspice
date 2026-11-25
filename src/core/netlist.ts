@@ -59,6 +59,9 @@ export function netName(text: string): string {
   return s === 'gnd' ? '0' : s;
 }
 
+/** A V or I card with an AC stimulus: name, two nodes, then AC somewhere in the value. */
+const AC_SOURCE = /^\s*[vi]\S*\s+\S+\s+\S+\s+(?:.*[\s)])?ac(?![a-z0-9_])/i;
+
 export function analysisLine(a: Analysis, parts: Part[], issues: Issue[]): string {
   const num = (text: string, what: string, positive = true): string => {
     const v = parseSI(text);
@@ -345,6 +348,12 @@ export function compile(sch: Schematic, opts: CompileOptions = {}): Compiled {
   if (sw.sweep) lines.push(`.param ${sw.sweep.param}=${opts.sweepValue ?? sw.sweep.values[0].value}`);
   // Per-device currents (I(R1) and friends). ngspice cannot save them in AC analysis.
   if (sch.analysis.kind !== 'ac') lines.push('.options savecurrents');
+  // An AC sweep with no stimulus runs cleanly and plots zeros, which reads as a broken circuit.
+  // Looked for in the whole netlist, so sources inside subcircuits and hand-written ones count.
+  if (sch.analysis.kind === 'ac' && mainParts.some((p) => symbolFor(p).card) && !lines.join('\n').split('\n').some((l) => AC_SOURCE.test(l))) {
+    const source = mainParts.find((p) => p.kind === 'V' || p.kind === 'I');
+    issues.push({ level: 'error', message: 'AC sweep: no source has an AC value, so every trace would be zero. Give a source the value AC 1, or tick “AC sweep stimulus” in its properties', partId: source?.id });
+  }
   lines.push(analysisLine(sch.analysis, mainParts, issues), '.end');
 
   return {

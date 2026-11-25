@@ -34,7 +34,7 @@ Open **File > Examples**, press **Run** (F5), then pick the probe (P) and click 
 | Analyses | transient, AC (magnitude and phase), DC sweep, operating point (voltages written on the schematic), parameter sweeps |
 | Waveforms | probe voltages and currents, two cursors, trace math, stacked panes, zoom, CSV and PNG export |
 | Measurements | `.meas` lines, listed in their own tab |
-| Checks | no ground, unconnected pins, duplicate references, bad values, impossible source loops, floating nodes; ngspice messages explained in plain language |
+| Checks | no ground, unconnected pins, duplicate references, bad values, AC sweep without an AC source, impossible source loops, floating nodes; ngspice messages explained in plain language |
 | Files | autosave in the browser; open and save `.fspice.json` |
 
 ## How it works
@@ -76,11 +76,10 @@ passes, a second workflow deploys it to the project's own VM by running `deploy.
 
 - Device models are generic ones written for this project (`DGEN`, `NPN_GEN`, ...), not vendor parts.
 - The ideal op-amp never clips. The one with supply pins clips at its rails but models no slew rate or output current limit.
-- An AC sweep with no AC source runs and shows zeros, without a warning.
 - AC analysis plots voltages only (ngspice cannot save device currents there).
 - `.meas` cannot read a part current; measure through a 0 V voltage source.
 - SPICE directives are not checked. A mistake there can stall ngspice; the app stops a run after 60 s.
-- In a behavioural source, `limit()` does not clamp (use `min(max(x, lo), hi)`), and `sqrt()` of a negative signal stalls the run.
+- In a behavioural source, `limit()` is refused because ngspice does not clamp with it (use `min(max(x, lo), hi)`), and `sqrt()` of a negative signal stalls the run.
 - A slow network pays for the 20 MB engine on first load; there is no offline cache yet.
 
 ## Future work

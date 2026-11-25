@@ -643,10 +643,27 @@ describe('vector labels', () => {
 describe('Phase 4 values', () => {
   const scope = { nets: new Set(['in', 'a']), vsources: new Set(['v1']) };
   it('accepts expressions ngspice can run', () => {
-    for (const e of ['v(in)*2+1', 'V(IN)/1k', 'v(in,a)', 'i(v1)*1meg', 'v(in)>1 ? v(a) : -v(a)', '(v(in)+{k})^2', 'limit(v(in), 0, 1)', 'max(v(in),v(a))*sin(time)', 'v(in)**2', '!v(a) && v(in)<>1']) expect(checkExpression(e, scope), e).toBeNull();
+    for (const e of ['v(in)*2+1', 'V(IN)/1k', 'v(in,a)', 'i(v1)*1meg', 'v(in)>1 ? v(a) : -v(a)', '(v(in)+{k})^2', 'min(max(v(in), 0), 1)', 'max(v(in),v(a))*sin(time)', 'v(in)**2', '!v(a) && v(in)<>1']) expect(checkExpression(e, scope), e).toBeNull();
   });
   it('refuses everything measured to make ngspice hang or misread', () => {
     for (const e of ['', 'v(in)*', 'v(in)*(2', '*2', 'v(in,a,0)', 'abs()', 'pow(v(in))', 'v(in)>1 ? 1', 'v(in)/0', 'exp(v(in)', 'time*', '()', 'int(v(in))', 'atan2(v(in),1)', '4k7*v(in)', 'v(nope)', 'i(r1)', 'foo*2', 'v(in) v(a)', 'v(in']) expect(checkExpression(e, scope), e).not.toBeNull();
+  });
+  it('refuses limit(), which ngspice does not treat as a clamp, and says what to write', () => {
+    expect(checkExpression('limit(v(in), -1, 1)', scope)).toMatch(/min\(max\(x, lo\), hi\)/);
+    expect(checkExpression('2*LIMIT(v(in), 0, 1)', scope)).toMatch(/does not clamp/);
+  });
+  it('refuses an AC sweep in which no source has an AC value', () => {
+    const ac = { kind: 'ac' as const, points: '10', fstart: '10', fstop: '1k' };
+    const circuit = (value: string, directives = '') => compile({ ...sch([P('V', 'V1', 0, 0, value), P('R', 'R1', 10, 0), P('GND', '', 0, 2, '')], [[0, -2, 10, -2], [0, 2, 10, 2]]), analysis: ac, directives });
+    const none = circuit('SIN(0 1 1k)');
+    expect(none.ok).toBe(false);
+    expect(none.issues.find((i) => /no source has an AC value/.test(i.message))?.partId).toBeDefined();
+    for (const value of ['AC 1', 'ac 1', 'DC 2 AC 1 90', 'AC', 'SIN(0 1 1k) AC 1']) expect(circuit(value).ok, value).toBe(true);
+    // a stimulus written by hand in the directives counts; a net that happens to be called ac does not
+    expect(circuit('5', 'V9 x 0 AC 1').ok).toBe(true);
+    expect(circuit('5', 'V9 ac 0 5').ok).toBe(false);
+    // other analyses do not care
+    expect(compile(sch([P('V', 'V1', 0, 0, '5'), P('R', 'R1', 10, 0), P('GND', '', 0, 2, '')], [[0, -2, 10, -2], [0, 2, 10, 2]])).ok).toBe(true);
   });
   it('checks potentiometer, transformer and sense values', () => {
     expect(parsePot('10k').ok).toBe(true); expect(parsePot('10k 1').ok).toBe(false); expect(parsePot('0 0.5').ok).toBe(false);

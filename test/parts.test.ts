@@ -45,6 +45,17 @@ const max = (a: Float64Array) => a.reduce((m, v) => Math.max(m, v), -Infinity);
 const min = (a: Float64Array) => a.reduce((m, v) => Math.min(m, v), Infinity);
 
 describe('parts in ngspice', () => {
+  // A function that parses but computes something else is worse than a refused one (limit() was).
+  it('behavioural functions give the values their names promise', async () => {
+    const cases: [string, number][] = [
+      ['abs(-2)', 2], ['sqrt(4)', 2], ['sin(1)', Math.sin(1)], ['cos(1)', Math.cos(1)], ['tan(1)', Math.tan(1)],
+      ['asin(1)', Math.asin(1)], ['acos(0)', Math.acos(0)], ['atan(1)', Math.atan(1)], ['sinh(1)', Math.sinh(1)], ['cosh(1)', Math.cosh(1)], ['tanh(1)', Math.tanh(1)],
+      ['exp(1)', Math.E], ['ln(10)', Math.log(10)], ['log(10)', Math.log(10)], ['log10(10)', 1], ['sgn(-3)', -1], ['u(2)', 1], ['u(-2)', 0], ['uramp(3)', 3],
+      ['floor(2.7)', 2], ['ceil(2.2)', 3], ['nint(2.6)', 3], ['pow(2,3)', 8], ['pwr(-2,3)', -8], ['min(2,3)', 2], ['max(2,3)', 3], ['min(max(5,-1),1)', 1],
+    ];
+    const r = await run(cases.map(([expr], i): Spec => ['BSRC', `B${i + 1}`, `V=${expr}`, [`y${i}`, '0']]).concat(cases.map((_, i): Spec => ['R', `R${i + 1}`, '1k', [`y${i}`, '0']])), op);
+    cases.forEach(([expr, want], i) => expect(vec(r, `v(y${i})`)[0], expr).toBeCloseTo(want, 6));
+  });
   it('zener holds about 5.1 V from a 12 V supply', async () => {
     const r = await run([['V', 'V1', '12', ['in', '0']], ['R', 'R1', '470', ['in', 'z']], ['ZENER', 'D1', 'ZENER_5V1', ['0', 'z']]], op);
     expect(vec(r, 'v(z)')[0]).toBeGreaterThan(5.0); expect(vec(r, 'v(z)')[0]).toBeLessThan(5.3);

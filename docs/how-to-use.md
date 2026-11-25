@@ -282,7 +282,7 @@ The corner frequency is where the gain is −3 dB: here 1.592 kHz, with −45° 
 Two rules for AC:
 
 1. **A source needs an AC value**, such as `AC 1`, or tick *AC sweep stimulus* in the source editor.
-   With none, the run succeeds but every trace is zero, and the app does not warn you.
+   With none, every trace would be zero, so the app refuses to run and says why.
 2. With `AC 1`, the output voltage **is** the gain, so 0 dB means "unchanged".
 
 AC analysis linearises the circuit around its operating point. It shows small-signal behaviour only:
@@ -519,6 +519,7 @@ It now simulates. The status bar keeps the last message until you press Run agai
 | Message | Why | Fix |
 |---|---|---|
 | No ground | there is no node 0 | add a ground symbol |
+| no source has an AC value | an AC sweep has nothing to drive it | set a source to `AC 1` |
 | pin … is not connected to anything | a pin leads nowhere | wire it, or delete the part |
 | Two parts are called … | references must be unique | rename one |
 | is not a number | a value SPICE cannot read | check the suffix |
@@ -609,8 +610,8 @@ V=sin(2*pi*1k*time)
 
 `log` is the natural logarithm, the same as `ln`.
 
-> **Do not use `limit()`.** The app accepts it, but in ngspice it does not clamp: `limit(0.2, -1, 1)`
-> gives −0.8. To clamp, write `min(max(x, lo), hi)`.
+> **There is no `limit()`.** In ngspice it does not clamp (`limit(0.2, -1, 1)` gives −0.8), so the
+> app refuses it. To clamp, write `min(max(x, lo), hi)`.
 
 The app checks the whole expression first, because ngspice can stall on a mistake. One case it cannot
 catch: `sqrt()` of a signal that goes negative during the run. Write `sqrt(abs(v(x)))` or

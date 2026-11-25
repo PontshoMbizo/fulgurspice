@@ -100,11 +100,12 @@ export function parseBehavioural(value: string): BehaviouralResult {
   return { ok: true, kind: m[1].toUpperCase() as 'V' | 'I', expr: m[2] };
 }
 
-/** Functions measured to work in a B source, with their argument counts. `int` and `atan2` are
- * left out on purpose: ngspice-wasm never returns from them. */
+/** Functions measured to work in a B source, with their argument counts. Left out on purpose:
+ * `int` and `atan2`, because ngspice-wasm never returns from them, and `limit`, because it does not
+ * clamp (limit(0.2,-1,1) gives -0.8). test/parts.test.ts checks the value of every one listed. */
 const FUNCTIONS: Record<string, number> = {
   abs: 1, sqrt: 1, sin: 1, cos: 1, tan: 1, asin: 1, acos: 1, atan: 1, sinh: 1, cosh: 1, tanh: 1, exp: 1, ln: 1, log: 1, log10: 1,
-  sgn: 1, u: 1, uramp: 1, floor: 1, ceil: 1, nint: 1, pow: 2, pwr: 2, min: 2, max: 2, limit: 3,
+  sgn: 1, u: 1, uramp: 1, floor: 1, ceil: 1, nint: 1, pow: 2, pwr: 2, min: 2, max: 2,
 };
 const CONSTANTS = new Set(['time', 'temper', 'pi', 'e']);
 
@@ -183,6 +184,7 @@ export function checkExpression(expr: string, scope: ExprScope): string | null {
       }
       return;
     }
+    if (name === 'limit') fail('limit() does not clamp in ngspice: write min(max(x, lo), hi) instead');
     const arity = Object.hasOwn(FUNCTIONS, name) ? FUNCTIONS[name] : fail(`"${written}(" is not a function ngspice knows`);
     next();
     let count = 0;

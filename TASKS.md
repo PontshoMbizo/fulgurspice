@@ -19,7 +19,7 @@
 ## Phase 2 — netlister
 - [x] **DONE** Union-find connectivity, net labels, ground, deterministic node names
 - [x] **DONE** Rule checks: no ground, unconnected pin, duplicate reference, bad value
-- [ ] Rule check: AC analysis with no AC source (was marked done; measured 2026-11-25: runs, shows zeros, no message)
+- [x] **DONE** Rule check: AC analysis with no AC source (error)
 - [x] **DONE** Rule check: loop of voltage sources / inductors (error), cut-set of current sources (error) — `src/core/rules.ts`
 - [x] **DONE** Rule check: node with no DC path to ground (warning: ngspice adds gmin and carries on)
 - [x] **DONE** Subcircuit parts: draw a sheet with Subcircuit port parts, place it as an `X` instance; compiles to `.subckt` / `.ends`
@@ -57,11 +57,12 @@
 - [ ] Import LTspice `.asc` and KiCad netlists
 
 ## Bugs found while writing the guide (2026-11-25)
-- [ ] `limit()` in a behavioural source does not clamp in ngspice (`limit(0.2,-1,1)` gives -0.8) but `checkExpression` accepts it: remove it from `FUNCTIONS`
+- [x] **DONE** `limit()` in a behavioural source does not clamp in ngspice (`limit(0.2,-1,1)` gives -0.8): `checkExpression` refuses it and suggests `min(max())`; every allowed function's value is tested
 - [ ] `LED_RED` hint says about 1.8 V at 10 mA; the model gives about 1.9 V
 - [ ] Waveform Stack / CSV / PNG buttons cover the top label of the right-hand axis
 - [ ] Dragging the results panel edge selects page text
 - [ ] The status bar keeps an old error after the circuit is fixed, until the next run
+- [ ] F5 does nothing in the app while a field or checkbox has focus, so the browser's own reload applies (read from the key handler in `App.tsx`; reload not observed)
 
 ## Future work (shelved)
 - [ ] Real part models (1N4148, 2N3904/3906, 2N7000, LM358, TL072). Vendor files cannot be bundled (`docs/model-licences.md`); likely route: our own models fitted to datasheet figures, one test per figure
