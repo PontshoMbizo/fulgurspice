@@ -1,0 +1,24 @@
+name: CI
+
+# Tests (core, analysis, parts, and real ngspice runs in Node) and the production
+# build. A pass on main triggers deploy.yml.
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Tests (vitest, real ngspice)
+        run: npm test
+      - name: Build (typecheck + vite)
+        run: npm run build
