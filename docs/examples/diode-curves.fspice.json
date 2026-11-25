@@ -1,0 +1,178 @@
+{
+  "format": "fulgurspice-schematic",
+  "version": 1,
+  "title": "Diode curves",
+  "parts": [
+    {
+      "id": "g1",
+      "kind": "V",
+      "ref": "V1",
+      "x": 8,
+      "y": 12,
+      "rot": 0,
+      "mirror": false,
+      "value": "0"
+    },
+    {
+      "id": "g2",
+      "kind": "R",
+      "ref": "R1",
+      "x": 16,
+      "y": 10,
+      "rot": 0,
+      "mirror": false,
+      "value": "100"
+    },
+    {
+      "id": "g3",
+      "kind": "D",
+      "ref": "D1",
+      "x": 16,
+      "y": 16,
+      "rot": 0,
+      "mirror": false,
+      "value": "DGEN"
+    },
+    {
+      "id": "g4",
+      "kind": "R",
+      "ref": "R2",
+      "x": 24,
+      "y": 10,
+      "rot": 0,
+      "mirror": false,
+      "value": "100"
+    },
+    {
+      "id": "g5",
+      "kind": "LED",
+      "ref": "D2",
+      "x": 24,
+      "y": 16,
+      "rot": 0,
+      "mirror": false,
+      "value": "LED_RED"
+    },
+    {
+      "id": "g6",
+      "kind": "GND",
+      "ref": "",
+      "x": 16,
+      "y": 20,
+      "rot": 0,
+      "mirror": false,
+      "value": ""
+    },
+    {
+      "id": "g7",
+      "kind": "LABEL",
+      "ref": "",
+      "x": 8,
+      "y": 6,
+      "rot": 0,
+      "mirror": false,
+      "value": "in"
+    },
+    {
+      "id": "g8",
+      "kind": "LABEL",
+      "ref": "",
+      "x": 16,
+      "y": 13,
+      "rot": 0,
+      "mirror": false,
+      "value": "si"
+    },
+    {
+      "id": "g9",
+      "kind": "LABEL",
+      "ref": "",
+      "x": 24,
+      "y": 13,
+      "rot": 0,
+      "mirror": false,
+      "value": "red"
+    }
+  ],
+  "wires": [
+    {
+      "id": "g10",
+      "x1": 8,
+      "y1": 10,
+      "x2": 8,
+      "y2": 6
+    },
+    {
+      "id": "g11",
+      "x1": 8,
+      "y1": 6,
+      "x2": 24,
+      "y2": 6
+    },
+    {
+      "id": "g12",
+      "x1": 16,
+      "y1": 6,
+      "x2": 16,
+      "y2": 8
+    },
+    {
+      "id": "g13",
+      "x1": 24,
+      "y1": 6,
+      "x2": 24,
+      "y2": 8
+    },
+    {
+      "id": "g14",
+      "x1": 16,
+      "y1": 12,
+      "x2": 16,
+      "y2": 14
+    },
+    {
+      "id": "g15",
+      "x1": 24,
+      "y1": 12,
+      "x2": 24,
+      "y2": 14
+    },
+    {
+      "id": "g16",
+      "x1": 8,
+      "y1": 14,
+      "x2": 8,
+      "y2": 20
+    },
+    {
+      "id": "g17",
+      "x1": 16,
+      "y1": 18,
+      "x2": 16,
+      "y2": 20
+    },
+    {
+      "id": "g18",
+      "x1": 24,
+      "y1": 18,
+      "x2": 24,
+      "y2": 20
+    },
+    {
+      "id": "g19",
+      "x1": 8,
+      "y1": 20,
+      "x2": 24,
+      "y2": 20
+    }
+  ],
+  "analysis": {
+    "kind": "dc",
+    "source": "V1",
+    "start": "0",
+    "stop": "3",
+    "step": "0.01"
+  },
+  "directives": "",
+  "subckts": []
+}

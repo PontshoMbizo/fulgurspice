@@ -18,7 +18,8 @@
 
 ## Phase 2 — netlister
 - [x] **DONE** Union-find connectivity, net labels, ground, deterministic node names
-- [x] **DONE** Rule checks: no ground, unconnected pin, duplicate reference, bad value, AC without a source
+- [x] **DONE** Rule checks: no ground, unconnected pin, duplicate reference, bad value
+- [ ] Rule check: AC analysis with no AC source (was marked done; measured 2026-11-25: runs, shows zeros, no message)
 - [x] **DONE** Rule check: loop of voltage sources / inductors (error), cut-set of current sources (error) — `src/core/rules.ts`
 - [x] **DONE** Rule check: node with no DC path to ground (warning: ngspice adds gmin and carries on)
 - [x] **DONE** Subcircuit parts: draw a sheet with Subcircuit port parts, place it as an `X` instance; compiles to `.subckt` / `.ends`
@@ -38,7 +39,7 @@
 - [ ] Phase 3 follow-ups: sweeps for operating-point analysis (a table per value); a swept subcircuit-parameter shortcut; vertical pan; cursor snap to data points; measurement helper dialog
 
 ## Phase 4 — models and parts
-- [ ] Real part models (1N4148, 2N3904/3906, 2N7000, LM358, TL072): check each vendor licence first
+- [x] **DONE** Vendor model licence check: no terms read allow bundling them (`docs/model-licences.md`)
 - [x] **DONE** Op-amp with supply pins and rail clipping (`OPAMP_RAIL`, `OPAMP_RR`; no slew-rate or current limit)
 - [x] **DONE** More parts: potentiometer, switches (manual and voltage controlled), transformer, zener and LED symbols, controlled sources (E/G/F/H), behavioural source (B); each checked against ngspice (`test/parts.test.ts`)
 - [x] **DONE** Source editor (DC / SIN / PULSE / PWL / AC fields) in the Inspector, beside the free-text value
@@ -55,7 +56,18 @@
 - [ ] Co-simulation with fulgurlab blocks (circuit as a plant model)
 - [ ] Import LTspice `.asc` and KiCad netlists
 
+## Bugs found while writing the guide (2026-11-25)
+- [ ] `limit()` in a behavioural source does not clamp in ngspice (`limit(0.2,-1,1)` gives -0.8) but `checkExpression` accepts it: remove it from `FUNCTIONS`
+- [ ] `LED_RED` hint says about 1.8 V at 10 mA; the model gives about 1.9 V
+- [ ] Waveform Stack / CSV / PNG buttons cover the top label of the right-hand axis
+- [ ] Dragging the results panel edge selects page text
+- [ ] The status bar keeps an old error after the circuit is fixed, until the next run
+
+## Future work (shelved)
+- [ ] Real part models (1N4148, 2N3904/3906, 2N7000, LM358, TL072). Vendor files cannot be bundled (`docs/model-licences.md`); likely route: our own models fitted to datasheet figures, one test per figure
+
 ## Housekeeping
-- [ ] Create the GitHub repo and push (`gh repo create fulgurspice --private --source=. --remote=origin --push`)
-- [ ] CI: `npm test` + `npm run build`
+- [x] **DONE** Create the GitHub repo and push
+- [x] **DONE** README update and how-to guide with screenshots (`docs/how-to-use.md`, example circuits in `docs/examples/`)
+- [x] **DONE** CI: `npm test` + `npm run build` on GitHub Actions, then deploy to the VM
 - [ ] Playwright smoke test checked into the repo (place parts, wire, run, probe)

@@ -2,11 +2,14 @@
 
 A circuit simulator for the browser: draw a schematic the way you would in KiCad, simulate it with
 real SPICE (ngspice compiled to WebAssembly), and read the result in an LTspice-style waveform
-viewer. Nothing is sent to a server. Built as the electronics counterpart to
-[fulgurlab](../fulgurlab) for scope.io.
+viewer. The simulation runs on your own machine: no circuit is sent to a server. Built as the
+electronics counterpart to fulgurlab for scope.io.
 
 ![Half-wave rectifier, transient](docs/images/rectifier.png)
 ![RC low-pass, AC sweep](docs/images/bode.png)
+
+**New here?** Read **[How to use fulgurspice](docs/how-to-use.md)**: SPICE and the app from the
+beginning, with screenshots and worked examples.
 
 ## Getting started
 
@@ -19,6 +22,21 @@ npm run build      # typecheck + production bundle in dist/
 
 Open **File > Examples**, press **Run** (F5), then pick the probe (P) and click a wire or a part.
 
+## What works today
+
+| Area | Included |
+|---|---|
+| Passive parts | R, C, L, potentiometer, manual and voltage-controlled switch, transformer |
+| Sources | voltage and current (DC, sine, pulse, piecewise linear, AC) with a source editor; controlled sources E, G, F, H; behavioural source B |
+| Semiconductors | diode, zener, LED, NPN, PNP, N and P MOSFET, ideal op-amp, op-amp with supply pins that clips |
+| Drawing | grid wiring with automatic junctions; rotate, mirror, drag with wires following, box select, copy and paste, undo and redo |
+| Subcircuits | draw one as a sheet or make one from a selection; parameters; test bench parts |
+| Analyses | transient, AC (magnitude and phase), DC sweep, operating point (voltages written on the schematic), parameter sweeps |
+| Waveforms | probe voltages and currents, two cursors, trace math, stacked panes, zoom, CSV and PNG export |
+| Measurements | `.meas` lines, listed in their own tab |
+| Checks | no ground, unconnected pins, duplicate references, bad values, impossible source loops, floating nodes; ngspice messages explained in plain language |
+| Files | autosave in the browser; open and save `.fspice.json` |
+
 ## How it works
 
 ```
@@ -26,46 +44,57 @@ schematic (JSON, integer grid) ──compile()──► SPICE netlist ──► 
         src/core/types.ts        src/core/netlist.ts              src/sim/worker.ts          src/sim/result.ts
 ```
 
-The netlist text is the only interface between the editor and the engine, so the same netlist runs
+The netlist text is the only interface between the editor and the engine, so the same netlist can run
 in the browser, on a grading server, or in desktop ngspice.
 
 | Folder | What lives there |
 |---|---|
-| `src/core/` | Pure TypeScript, no DOM: units, symbol library, netlister + rule checks, examples |
-| `src/sim/` | The ngspice worker, its client, and result normalisation |
-| `src/ui/` | React: schematic canvas (SVG), waveform viewer (canvas), parts library, inspector |
-| `test/` | `core.test.ts` (netlister, units) and `engine.test.ts` (examples through real ngspice) |
+| `src/core/` | Pure TypeScript, no DOM: units, symbol library, netlister and rule checks, subcircuits, examples |
+| `src/sim/` | The ngspice worker, its client, result normalisation, trace math and measurements |
+| `src/ui/` | React: schematic canvas (SVG), waveform viewer (canvas), parts library, properties |
+| `test/` | Netlister, analysis, per-part and example tests; the engine tests run real ngspice |
+| `docs/` | [How-to guide](docs/how-to-use.md), example circuits, screenshots, [model licence notes](docs/model-licences.md) |
 
-## What works today
+## Deploying
 
-- Parts: R, C, L, voltage and current sources, diode, NPN/PNP, N/P MOSFET, ideal op-amp, ground, net labels
-- Wiring on a grid with automatic junctions; rotate, mirror, move, delete, undo/redo; autosave; open/save JSON
-- Analyses: transient, AC sweep (magnitude in dB and phase), DC sweep, operating point (voltages written on the schematic)
-- Probing: click a wire for its voltage, a part for its current; voltages left axis, currents right axis
-- Rule checks before the engine runs: no ground, unconnected pins, duplicate references, bad values
-- ngspice warnings explained in plain language (floating node, missing model, no convergence)
+The app is a static site. `npm run build` writes it to `dist/`, which any web server can serve.
+On GitHub, every push and pull request to `main` runs the tests and the build. When a push to `main`
+passes, a second workflow deploys it to the project's own VM by running `deploy.sh`, which builds
+`origin/main` in a Node container and copies the result into nginx's web root.
 
-## Measured (2026-11-13)
+## Measured (2026-11-25)
 
 | What | Result |
 |---|---|
-| Engine start, Node 22 | about 350 ms |
-| First Run in Chrome, engine not yet loaded (local preview) | about 1.1 s wall clock |
-| RC transient, 512 points | 20 to 35 ms |
-| Engine chunk | 20.2 MB uncompressed, fetched lazily by the worker; app bundle 277 kB (88 kB gzip) |
+| Engine start, Node 22, one run | 514 ms |
+| RC transient, 512 points, Node, 12 runs | median about 8 ms (first run 38 ms) |
+| Page open to first result, headless Chrome, local preview build, 5 runs | 1.3 to 1.5 s (HTTP cache disabled) |
+| Engine chunk | 20.2 MB uncompressed, fetched by the worker |
+| App bundle | 358 kB (116 kB gzip), plus 30 kB CSS and the fonts |
 
 ## Known limits
 
-- Moving a part does not drag its wires along.
 - Device models are generic ones written for this project (`DGEN`, `NPN_GEN`, ...), not vendor parts.
-- The plain op-amp is ideal and never clips. The one with supply pins clips at its rails but models no slew rate or output current limit.
-- `sqrt()` of a negative signal in a behavioural source stalls ngspice; the app stops the run after 60 s.
+- The ideal op-amp never clips. The one with supply pins clips at its rails but models no slew rate or output current limit.
+- An AC sweep with no AC source runs and shows zeros, without a warning.
 - AC analysis plots voltages only (ngspice cannot save device currents there).
+- `.meas` cannot read a part current; measure through a 0 V voltage source.
+- SPICE directives are not checked. A mistake there can stall ngspice; the app stops a run after 60 s.
+- In a behavioural source, `limit()` does not clamp (use `min(max(x, lo), hi)`), and `sqrt()` of a negative signal stalls the run.
 - A slow network pays for the 20 MB engine on first load; there is no offline cache yet.
 
-See [TASKS.md](TASKS.md) for what is next.
+## Future work
+
+- **Real part models** (1N4148, 2N3904/3906, 2N7000, LM358, TL072). Shelved: no vendor terms read
+  allow bundling their files ([notes](docs/model-licences.md)). The likely route is our own models
+  fitted to datasheet figures.
+- scope.io integration: an embeddable editor, problem definitions and server-side grading.
+- Offline caching of the engine; import of LTspice and KiCad files.
+
+[TASKS.md](TASKS.md) has the full list.
 
 ## Credits
 
 Simulation by [ngspice](https://ngspice.sourceforge.io/) through
-[eecircuit-engine](https://github.com/eelab-dev/EEcircuit-engine) (MIT).
+[eecircuit-engine](https://github.com/eelab-dev/EEcircuit-engine) (MIT). Icons from
+[Lucide](https://lucide.dev/) (ISC).

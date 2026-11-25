@@ -1,0 +1,271 @@
+{
+  "format": "fulgurspice-schematic",
+  "version": 1,
+  "title": "Inverting amplifier with supplies",
+  "parts": [
+    {
+      "id": "g63",
+      "kind": "V",
+      "ref": "V1",
+      "x": 4,
+      "y": 18,
+      "rot": 0,
+      "mirror": false,
+      "value": "SIN(0 1 1k)"
+    },
+    {
+      "id": "g64",
+      "kind": "R",
+      "ref": "R1",
+      "x": 10,
+      "y": 12,
+      "rot": 90,
+      "mirror": false,
+      "value": "1k"
+    },
+    {
+      "id": "g65",
+      "kind": "R",
+      "ref": "R2",
+      "x": 20,
+      "y": 6,
+      "rot": 90,
+      "mirror": false,
+      "value": "10k"
+    },
+    {
+      "id": "g66",
+      "kind": "OPAMPS",
+      "ref": "U1",
+      "x": 20,
+      "y": 13,
+      "rot": 0,
+      "mirror": false,
+      "value": "OPAMP_RAIL"
+    },
+    {
+      "id": "g67",
+      "kind": "V",
+      "ref": "V2",
+      "x": 33,
+      "y": 8,
+      "rot": 0,
+      "mirror": false,
+      "value": "5"
+    },
+    {
+      "id": "g68",
+      "kind": "V",
+      "ref": "V3",
+      "x": 33,
+      "y": 19,
+      "rot": 0,
+      "mirror": false,
+      "value": "5"
+    },
+    {
+      "id": "g69",
+      "kind": "GND",
+      "ref": "",
+      "x": 15,
+      "y": 17,
+      "rot": 0,
+      "mirror": false,
+      "value": ""
+    },
+    {
+      "id": "g70",
+      "kind": "GND",
+      "ref": "",
+      "x": 33,
+      "y": 13,
+      "rot": 0,
+      "mirror": false,
+      "value": ""
+    },
+    {
+      "id": "g71",
+      "kind": "GND",
+      "ref": "",
+      "x": 4,
+      "y": 22,
+      "rot": 0,
+      "mirror": false,
+      "value": ""
+    },
+    {
+      "id": "g72",
+      "kind": "LABEL",
+      "ref": "",
+      "x": 4,
+      "y": 12,
+      "rot": 0,
+      "mirror": false,
+      "value": "in"
+    },
+    {
+      "id": "g73",
+      "kind": "LABEL",
+      "ref": "",
+      "x": 27,
+      "y": 13,
+      "rot": 0,
+      "mirror": false,
+      "value": "out"
+    },
+    {
+      "id": "g74",
+      "kind": "LABEL",
+      "ref": "",
+      "x": 20,
+      "y": 10,
+      "rot": 0,
+      "mirror": false,
+      "value": "vcc"
+    },
+    {
+      "id": "g75",
+      "kind": "LABEL",
+      "ref": "",
+      "x": 20,
+      "y": 16,
+      "rot": 0,
+      "mirror": false,
+      "value": "vee"
+    },
+    {
+      "id": "g76",
+      "kind": "LABEL",
+      "ref": "",
+      "x": 33,
+      "y": 4,
+      "rot": 0,
+      "mirror": false,
+      "value": "vcc"
+    },
+    {
+      "id": "g77",
+      "kind": "LABEL",
+      "ref": "",
+      "x": 33,
+      "y": 23,
+      "rot": 0,
+      "mirror": false,
+      "value": "vee"
+    }
+  ],
+  "wires": [
+    {
+      "id": "g78",
+      "x1": 4,
+      "y1": 16,
+      "x2": 4,
+      "y2": 12
+    },
+    {
+      "id": "g79",
+      "x1": 4,
+      "y1": 12,
+      "x2": 8,
+      "y2": 12
+    },
+    {
+      "id": "g80",
+      "x1": 12,
+      "y1": 12,
+      "x2": 17,
+      "y2": 12
+    },
+    {
+      "id": "g81",
+      "x1": 15,
+      "y1": 12,
+      "x2": 15,
+      "y2": 6
+    },
+    {
+      "id": "g82",
+      "x1": 15,
+      "y1": 6,
+      "x2": 18,
+      "y2": 6
+    },
+    {
+      "id": "g83",
+      "x1": 22,
+      "y1": 6,
+      "x2": 27,
+      "y2": 6
+    },
+    {
+      "id": "g84",
+      "x1": 27,
+      "y1": 6,
+      "x2": 27,
+      "y2": 13
+    },
+    {
+      "id": "g85",
+      "x1": 23,
+      "y1": 13,
+      "x2": 27,
+      "y2": 13
+    },
+    {
+      "id": "g86",
+      "x1": 17,
+      "y1": 14,
+      "x2": 15,
+      "y2": 14
+    },
+    {
+      "id": "g87",
+      "x1": 15,
+      "y1": 14,
+      "x2": 15,
+      "y2": 17
+    },
+    {
+      "id": "g88",
+      "x1": 4,
+      "y1": 20,
+      "x2": 4,
+      "y2": 22
+    },
+    {
+      "id": "g89",
+      "x1": 33,
+      "y1": 6,
+      "x2": 33,
+      "y2": 4
+    },
+    {
+      "id": "g90",
+      "x1": 33,
+      "y1": 10,
+      "x2": 33,
+      "y2": 13
+    },
+    {
+      "id": "g91",
+      "x1": 33,
+      "y1": 13,
+      "x2": 33,
+      "y2": 17
+    },
+    {
+      "id": "g92",
+      "x1": 33,
+      "y1": 21,
+      "x2": 33,
+      "y2": 23
+    }
+  ],
+  "analysis": {
+    "kind": "tran",
+    "step": "5u",
+    "stop": "3m"
+  },
+  "directives": "",
+  "subckts": []
+}

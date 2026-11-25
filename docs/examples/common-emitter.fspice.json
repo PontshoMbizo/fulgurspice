@@ -1,0 +1,374 @@
+{
+  "format": "fulgurspice-schematic",
+  "version": 1,
+  "title": "Common-emitter amplifier",
+  "parts": [
+    {
+      "id": "g20",
+      "kind": "V",
+      "ref": "V1",
+      "x": 2,
+      "y": 20,
+      "rot": 0,
+      "mirror": false,
+      "value": "SIN(0 10m 1k)"
+    },
+    {
+      "id": "g21",
+      "kind": "C",
+      "ref": "C1",
+      "x": 10,
+      "y": 16,
+      "rot": 90,
+      "mirror": false,
+      "value": "10u"
+    },
+    {
+      "id": "g22",
+      "kind": "R",
+      "ref": "R1",
+      "x": 16,
+      "y": 9,
+      "rot": 0,
+      "mirror": false,
+      "value": "47k"
+    },
+    {
+      "id": "g23",
+      "kind": "R",
+      "ref": "R2",
+      "x": 16,
+      "y": 21,
+      "rot": 0,
+      "mirror": false,
+      "value": "10k"
+    },
+    {
+      "id": "g24",
+      "kind": "NPN",
+      "ref": "Q1",
+      "x": 23,
+      "y": 16,
+      "rot": 0,
+      "mirror": false,
+      "value": "NPN_GEN"
+    },
+    {
+      "id": "g25",
+      "kind": "R",
+      "ref": "R3",
+      "x": 24,
+      "y": 9,
+      "rot": 0,
+      "mirror": false,
+      "value": "4k7"
+    },
+    {
+      "id": "g26",
+      "kind": "R",
+      "ref": "R4",
+      "x": 24,
+      "y": 22,
+      "rot": 0,
+      "mirror": false,
+      "value": "1k"
+    },
+    {
+      "id": "g27",
+      "kind": "C",
+      "ref": "C2",
+      "x": 30,
+      "y": 22,
+      "rot": 0,
+      "mirror": false,
+      "value": "100u"
+    },
+    {
+      "id": "g28",
+      "kind": "C",
+      "ref": "C3",
+      "x": 30,
+      "y": 12,
+      "rot": 90,
+      "mirror": false,
+      "value": "10u"
+    },
+    {
+      "id": "g29",
+      "kind": "R",
+      "ref": "R5",
+      "x": 36,
+      "y": 16,
+      "rot": 0,
+      "mirror": false,
+      "value": "100k"
+    },
+    {
+      "id": "g30",
+      "kind": "V",
+      "ref": "V2",
+      "x": 42,
+      "y": 9,
+      "rot": 0,
+      "mirror": false,
+      "value": "12"
+    },
+    {
+      "id": "g31",
+      "kind": "GND",
+      "ref": "",
+      "x": 24,
+      "y": 28,
+      "rot": 0,
+      "mirror": false,
+      "value": ""
+    },
+    {
+      "id": "g32",
+      "kind": "GND",
+      "ref": "",
+      "x": 42,
+      "y": 13,
+      "rot": 0,
+      "mirror": false,
+      "value": ""
+    },
+    {
+      "id": "g33",
+      "kind": "LABEL",
+      "ref": "",
+      "x": 2,
+      "y": 16,
+      "rot": 0,
+      "mirror": false,
+      "value": "in"
+    },
+    {
+      "id": "g34",
+      "kind": "LABEL",
+      "ref": "",
+      "x": 18,
+      "y": 16,
+      "rot": 0,
+      "mirror": false,
+      "value": "b"
+    },
+    {
+      "id": "g35",
+      "kind": "LABEL",
+      "ref": "",
+      "x": 24,
+      "y": 12,
+      "rot": 0,
+      "mirror": false,
+      "value": "c"
+    },
+    {
+      "id": "g36",
+      "kind": "LABEL",
+      "ref": "",
+      "x": 24,
+      "y": 19,
+      "rot": 0,
+      "mirror": false,
+      "value": "e"
+    },
+    {
+      "id": "g37",
+      "kind": "LABEL",
+      "ref": "",
+      "x": 36,
+      "y": 12,
+      "rot": 0,
+      "mirror": false,
+      "value": "out"
+    },
+    {
+      "id": "g38",
+      "kind": "LABEL",
+      "ref": "",
+      "x": 24,
+      "y": 4,
+      "rot": 0,
+      "mirror": false,
+      "value": "vcc"
+    }
+  ],
+  "wires": [
+    {
+      "id": "g39",
+      "x1": 2,
+      "y1": 18,
+      "x2": 2,
+      "y2": 16
+    },
+    {
+      "id": "g40",
+      "x1": 2,
+      "y1": 16,
+      "x2": 8,
+      "y2": 16
+    },
+    {
+      "id": "g41",
+      "x1": 12,
+      "y1": 16,
+      "x2": 16,
+      "y2": 16
+    },
+    {
+      "id": "g42",
+      "x1": 16,
+      "y1": 16,
+      "x2": 21,
+      "y2": 16
+    },
+    {
+      "id": "g43",
+      "x1": 16,
+      "y1": 11,
+      "x2": 16,
+      "y2": 16
+    },
+    {
+      "id": "g44",
+      "x1": 16,
+      "y1": 16,
+      "x2": 16,
+      "y2": 19
+    },
+    {
+      "id": "g45",
+      "x1": 16,
+      "y1": 7,
+      "x2": 16,
+      "y2": 4
+    },
+    {
+      "id": "g46",
+      "x1": 16,
+      "y1": 4,
+      "x2": 42,
+      "y2": 4
+    },
+    {
+      "id": "g47",
+      "x1": 42,
+      "y1": 4,
+      "x2": 42,
+      "y2": 7
+    },
+    {
+      "id": "g48",
+      "x1": 42,
+      "y1": 11,
+      "x2": 42,
+      "y2": 13
+    },
+    {
+      "id": "g49",
+      "x1": 24,
+      "y1": 4,
+      "x2": 24,
+      "y2": 7
+    },
+    {
+      "id": "g50",
+      "x1": 24,
+      "y1": 11,
+      "x2": 24,
+      "y2": 14
+    },
+    {
+      "id": "g51",
+      "x1": 24,
+      "y1": 18,
+      "x2": 24,
+      "y2": 20
+    },
+    {
+      "id": "g52",
+      "x1": 24,
+      "y1": 19,
+      "x2": 30,
+      "y2": 19
+    },
+    {
+      "id": "g53",
+      "x1": 30,
+      "y1": 19,
+      "x2": 30,
+      "y2": 20
+    },
+    {
+      "id": "g54",
+      "x1": 24,
+      "y1": 12,
+      "x2": 28,
+      "y2": 12
+    },
+    {
+      "id": "g55",
+      "x1": 32,
+      "y1": 12,
+      "x2": 36,
+      "y2": 12
+    },
+    {
+      "id": "g56",
+      "x1": 36,
+      "y1": 12,
+      "x2": 36,
+      "y2": 14
+    },
+    {
+      "id": "g57",
+      "x1": 2,
+      "y1": 22,
+      "x2": 2,
+      "y2": 28
+    },
+    {
+      "id": "g58",
+      "x1": 2,
+      "y1": 28,
+      "x2": 36,
+      "y2": 28
+    },
+    {
+      "id": "g59",
+      "x1": 16,
+      "y1": 23,
+      "x2": 16,
+      "y2": 28
+    },
+    {
+      "id": "g60",
+      "x1": 24,
+      "y1": 24,
+      "x2": 24,
+      "y2": 28
+    },
+    {
+      "id": "g61",
+      "x1": 30,
+      "y1": 24,
+      "x2": 30,
+      "y2": 28
+    },
+    {
+      "id": "g62",
+      "x1": 36,
+      "y1": 18,
+      "x2": 36,
+      "y2": 28
+    }
+  ],
+  "analysis": {
+    "kind": "tran",
+    "step": "5u",
+    "stop": "5m"
+  },
+  "directives": ".meas tran vout_pp PP v(out) from=3m to=5m\n.meas tran vin_pp PP v(in) from=3m to=5m",
+  "subckts": []
+}
