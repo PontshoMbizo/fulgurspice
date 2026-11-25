@@ -45,7 +45,7 @@ export function QuickAdd({ subckts, onPick, onPickSubckt, onClose }: { subckts: 
           {matches.map((d, i) => (
             <li key={d.key}>
               <button type="button" className={i === active ? 'is-active' : ''} onClick={() => choose(i)}>
-                <span>{d.label}</span><span style={{ marginLeft: 'auto', color: 'var(--ink-3)' }}>{d.group}</span>
+                <span>{d.label}</span><span style={{ marginLeft: 'auto', color: 'var(--muted)', fontSize: 11 }}>{d.group}</span>
               </button>
             </li>
           ))}

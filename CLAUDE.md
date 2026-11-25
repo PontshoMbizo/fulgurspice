@@ -21,7 +21,7 @@ Simulink-style block simulator backed by Scilab) and deliberately shares its des
 4. **Everything is on an integer grid** (1 unit = 10 px at 100 %). Connectivity is coordinate
    equality: a pin or wire end anywhere on a wire connects; crossing wires do not.
 5. **One table for parts.** A new part is one entry in `SYMBOLS` (`src/core/symbols.ts`): geometry,
-   pins, default value, SPICE card. The `A` search box, canvas and netlister read from it (there is no side palette).
+   pins, default value, SPICE card. The `A` search box, the Parts library panel, canvas and netlister read from it.
 5b. **Subcircuits are sheets.** `Schematic.subckts` holds definitions (parts + wires, ports are `PORT`
    parts); an instance is a `SUBCKT` part whose `value` is the definition's name and whose `ports`
    snapshot (kept in step by `syncInstances`) lays out its pins. The one exception to "geometry comes
@@ -51,9 +51,13 @@ Simulink-style block simulator backed by Scilab) and deliberately shares its des
   but the waveforms are fine, so `normalise()` must not treat it as a failed run.
 - Vector names stay as ngspice reports them (`v(out)`, `i(@r1[i])`); `vectorLabel()` makes the
   display form (`V(out)`, `I(R1)`).
-- Visual language: grey desktop chrome (from fulgurlab), KiCad default colours on the sheet
-  (green wires, dark-red symbols, teal text, cream background), light plot on the same panel as the other dock tabs. Tokens are at
-  the top of `src/styles.css`.
+- Visual language: the "refined classic" shell shared by the simulator suite (fulgurlab, fulgurspice,
+  nikaVSimulator, stmVSimulator; mockups in `../*-refined-classic.html`). Menu bar, chrome toolbar with a
+  green Run, Parts library | white dot-grid sheet | Properties, results dock (Waveforms / Measurements /
+  Netlist / Log), status bar. One blue accent; symbols and wires in the text colour. IBM Plex, 3 px radius,
+  28 px controls, Lucide icons inlined in `src/ui/Icons.tsx`. Light by default, follows the system dark
+  setting. Every colour is a token at the top of `src/styles.css`; the canvas plot reads `--plot-*` and
+  `--trace-N` from there (`WaveformViewer.tsx`), so do not hard-code colours in TS.
 - Every example in `src/core/examples.ts` is also a test fixture; a new example needs a physics
   assertion in `test/engine.test.ts`.
 

@@ -9,6 +9,7 @@ import { parseSweep } from '../core/params';
 import type { Analysis, Schematic } from '../core/types';
 import { patchParts } from './store';
 import { Field } from './Field';
+import { IconSlidersHorizontal } from './Icons';
 import { SourceEditor } from './SourceEditor';
 
 function Directives({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
@@ -103,8 +104,9 @@ export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRota
 
   return (
     <aside className="inspector" aria-label="Properties">
-      <div className="panel-title">{part ? def!.label : selection.size ? `${selection.size} selected` : editing !== null ? `Subcircuit ${editing}` : 'Simulation'}</div>
+      <div className="panel-title"><IconSlidersHorizontal /> Properties</div>
       <div className="inspector-body">
+        <p className="inspector-heading">{part ? `${def!.label}${part.ref ? ` ${part.ref}` : ''}` : selection.size ? `${selection.size} selected` : editing !== null ? `Subcircuit ${editing}` : 'Simulation'}</p>
         {part && def ? (
           <fieldset className="etched">
             <legend>Properties</legend>

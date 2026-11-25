@@ -16,7 +16,7 @@ export function MenuBar({ menus }: { menus: { title: string; items: MenuItem[] }
     return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('keydown', close); };
   }, [open]);
   return (
-    <div ref={ref} style={{ display: 'flex' }}>
+    <div ref={ref} className="menus">
       {menus.map((menu) => (
         <div className="menu" key={menu.title}>
           <button type="button" className={`menu-title${open === menu.title ? ' is-open' : ''}`} aria-haspopup="menu" aria-expanded={open === menu.title}

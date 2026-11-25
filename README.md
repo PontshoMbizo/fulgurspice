@@ -33,7 +33,7 @@ in the browser, on a grading server, or in desktop ngspice.
 |---|---|
 | `src/core/` | Pure TypeScript, no DOM: units, symbol library, netlister + rule checks, examples |
 | `src/sim/` | The ngspice worker, its client, and result normalisation |
-| `src/ui/` | React: schematic canvas (SVG), waveform viewer (canvas), palette, inspector |
+| `src/ui/` | React: schematic canvas (SVG), waveform viewer (canvas), parts library, inspector |
 | `test/` | `core.test.ts` (netlister, units) and `engine.test.ts` (examples through real ngspice) |
 
 ## What works today

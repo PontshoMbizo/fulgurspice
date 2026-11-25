@@ -28,6 +28,8 @@ interface Props {
   opValues: Map<string, number> | null;
   errorParts: Set<string>;
   fitToken: number;
+  /** Zoom in or out about the middle of the view (the zoom buttons); a new token applies `factor` once. */
+  zoomRequest?: { token: number; factor: number };
   onCommit: (sch: Schematic) => void;
   onSelect: (ids: string[]) => void;
   onProbe: (target: ProbeTarget) => void;
@@ -148,6 +150,20 @@ export function SchematicCanvas(props: Props) {
     const zoom = Math.max(0.5, Math.min(3, width / ((x1 - x0) * G), height / ((y1 - y0) * G)));
     setView({ zoom, panX: (width - (x0 + x1) * G * zoom) / 2, panY: (height - (y0 + y1) * G * zoom) / 2 });
   }, [props.fitToken]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Zoom buttons: same limits as the wheel, about the centre of the view.
+  useEffect(() => {
+    const req = props.zoomRequest;
+    const svg = svgRef.current;
+    if (!req || !req.token || !svg) return;
+    const { width, height } = svg.getBoundingClientRect();
+    const mx = width / 2, my = height / 2;
+    setView((v) => {
+      const zoom = Math.max(0.4, Math.min(8, v.zoom * req.factor));
+      const k = zoom / v.zoom;
+      return { zoom, panX: mx - (mx - v.panX) * k, panY: my - (my - v.panY) * k };
+    });
+  }, [props.zoomRequest?.token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Wheel zoom about the pointer. Registered by hand: React's wheel listener is passive.
   useEffect(() => {

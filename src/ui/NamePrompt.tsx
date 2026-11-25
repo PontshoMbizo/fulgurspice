@@ -10,13 +10,13 @@ export function NamePrompt({ title, problem, onSubmit, onClose }: { title: strin
   return (
     <Overlay onClose={onClose}>
       <div className="overlay-title">{title}</div>
-      <div style={{ padding: '4px 8px 0' }}>
+      <div>
         <input
           autoFocus aria-label="Name" value={name} placeholder="e.g. RCSTAGE, Buffer, H_bridge"
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } }}
         />
-        <div className="overlay-empty" role="status" style={{ padding: '4px 0', minHeight: 16, color: why ? '#b00020' : undefined }}>{why ?? ''}</div>
+        <div className="overlay-empty" role="status" style={{ padding: '4px 0', minHeight: 16, color: why ? 'var(--danger)' : undefined }}>{why ?? ''}</div>
       </div>
       <div className="overlay-actions">
         <button type="button" className="btn" onClick={onClose}>Cancel</button>

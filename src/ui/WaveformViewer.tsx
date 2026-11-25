@@ -1,5 +1,5 @@
-// LTspice-style plot on the same light panel as the other dock tabs: dotted grid, dark text,
-// saturated trace colours that read on white. Canvas 2D, redrawn whole on every change.
+// LTspice-style plot on the same panel as the other dock tabs: dotted grid, theme text colours,
+// token trace colours that read on the plot background. Canvas 2D, redrawn whole on every change.
 //
 //  - one pane with voltages on the left axis and currents (or AC phase) on the right,
 //    or "stacked": one pane per unit, sharing the time axis
@@ -13,9 +13,16 @@ import { formatSI, niceTicks } from '../core/units';
 import { cursorDelta, envelopeIndices, interpAt, toCsv } from '../sim/analysis';
 import type { SimResult } from '../sim/result';
 
-const COLORS = ['#1565c0', '#d32f2f', '#2e7d32', '#ef6c00', '#6a1b9a', '#00838f', '#ad1457', '#5d4037'];
-const INK = '#222', INK2 = '#555', GRID = '#cfcfcf', FRAME = '#8a8a8a';
-export const traceColor = (i: number) => COLORS[i % COLORS.length];
+// Colours are the --trace-N and --plot-* tokens in styles.css (light and dark), so the plot, the
+// trace chips and the probe highlights on the sheet change together. DOM users take the var()
+// as is; the canvas resolves it against the element's computed style on every draw.
+const TRACE_COUNT = 8;
+export const traceColor = (i: number) => `var(--trace-${(i % TRACE_COUNT) + 1})`;
+const tokenReader = (el: Element) => {
+  const cs = getComputedStyle(el);
+  const tok = (name: string) => cs.getPropertyValue(name).trim();
+  return { tok, col: (c: string) => { const m = /^var\((--[\w-]+)\)$/.exec(c); return m ? tok(m[1]) : c; } };
+};
 
 interface Series { label: string; color: string; axis: 'L' | 'R'; x: Float64Array; y: Float64Array; unit: string; dash: number[]; phase: boolean; pane: number }
 interface Axis { min: number; max: number; ticks: number[]; unit: string }
@@ -114,6 +121,14 @@ export function WaveformViewer({ result, traces, stacked, onStacked, fileBase }:
   const [cursors, setCursors] = useState<number[]>([]);
   const geo = useRef<{ panes: PaneGeo[]; x0: number; x1: number; pw: number } | null>(null);
   const down = useRef<number | null>(null);
+  // The plot reads its colours from CSS: redraw when the system switches between light and dark.
+  const [, setScheme] = useState(0);
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const redraw = () => setScheme((n) => n + 1);
+    mq.addEventListener('change', redraw);
+    return () => mq.removeEventListener('change', redraw);
+  }, []);
 
   const log = result.kind === 'ac';
   const series = useMemo(() => buildSeries(result, traces, stacked), [result, traces, stacked]);
@@ -145,7 +160,9 @@ export function WaveformViewer({ result, traces, stacked, onStacked, fileBase }:
     cv.width = Math.round(size.w * dpr); cv.height = Math.round(size.h * dpr);
     const g = cv.getContext('2d')!;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.fillStyle = '#fff'; g.fillRect(0, 0, size.w, size.h);
+    const { tok, col } = tokenReader(cv);
+    const INK = tok('--plot-ink'), INK2 = tok('--plot-text'), GRID = tok('--plot-grid'), FRAME = tok('--plot-frame');
+    g.fillStyle = tok('--plot'); g.fillRect(0, 0, size.w, size.h);
     geo.current = null;
     if (size.w < 160 || size.h < 80 || !(x1 > x0)) return;
 
@@ -194,7 +211,7 @@ export function WaveformViewer({ result, traces, stacked, onStacked, fileBase }:
         const a = s.axis === 'L' ? pn.left : pn.right;
         if (!a) continue;
         const i0 = Math.max(0, lowerBound(s.x, x0) - 1), i1 = Math.min(s.x.length - 1, lowerBound(s.x, x1));
-        g.strokeStyle = s.color; g.setLineDash(s.dash);
+        g.strokeStyle = col(s.color); g.setLineDash(s.dash);
         g.beginPath();
         let first = true;
         for (const i of envelopeIndices(s.y, i0, i1, Math.round(pw))) {
@@ -206,7 +223,7 @@ export function WaveformViewer({ result, traces, stacked, onStacked, fileBase }:
       g.setLineDash([]);
       if (zoomBox) {
         const lo2 = Math.min(zoomBox[0], zoomBox[1]), hi2 = Math.max(zoomBox[0], zoomBox[1]);
-        g.fillStyle = 'rgba(10,100,200,0.14)'; g.fillRect(lo2, pn.top, hi2 - lo2, pn.h);
+        g.fillStyle = tok('--plot-zoom'); g.fillRect(lo2, pn.top, hi2 - lo2, pn.h);
       }
       g.restore();
     });
@@ -219,14 +236,14 @@ export function WaveformViewer({ result, traces, stacked, onStacked, fileBase }:
     const names = series.filter((s) => !s.phase);
     const widths = names.map((s) => g.measureText(s.label).width + 18);
     let nx = M.l + Math.max(0, (pw - widths.reduce((a, b) => a + b, 0)) / 2);
-    names.forEach((s, i) => { g.fillStyle = s.color; g.fillText(s.label, nx, M.t / 2 + 1); nx += widths[i]; });
+    names.forEach((s, i) => { g.fillStyle = col(s.color); g.fillText(s.label, nx, M.t / 2 + 1); nx += widths[i]; });
 
     const box = (rows: { text: string; color: string }[], bx: number, by: number) => {
       const bw = Math.max(...rows.map((r) => g.measureText(r.text).width)) + 16, bh = rows.length * 15 + 8;
       const px = Math.min(Math.max(M.l + 4, bx), M.l + pw - bw - 4);
-      g.fillStyle = 'rgba(255,255,255,0.96)'; g.fillRect(px, by, bw, bh); g.strokeStyle = FRAME; g.strokeRect(px + 0.5, by + 0.5, bw, bh);
+      g.fillStyle = tok('--plot-readout'); g.fillRect(px, by, bw, bh); g.strokeStyle = FRAME; g.strokeRect(px + 0.5, by + 0.5, bw, bh);
       g.textAlign = 'left'; g.textBaseline = 'top';
-      rows.forEach((r, n) => { g.fillStyle = r.color; g.fillText(r.text, px + 8, by + 6 + n * 15); });
+      rows.forEach((r, n) => { g.fillStyle = col(r.color); g.fillText(r.text, px + 8, by + 6 + n * 15); });
     };
     const vline = (xv: number, color: string, dash: number[], label?: string) => {
       const px = Math.round(X(xv)) + 0.5;
@@ -236,7 +253,7 @@ export function WaveformViewer({ result, traces, stacked, onStacked, fileBase }:
     };
 
     if (cursors.length) {
-      cursors.forEach((c, i) => vline(c, i === 0 ? '#b26a00' : '#0077b6', [], i === 0 ? 'A' : 'B'));
+      cursors.forEach((c, i) => vline(c, tok(i === 0 ? '--cursor-a' : '--cursor-b'), [], i === 0 ? 'A' : 'B'));
       const xs = `${xLabel} =`;
       const rows: { text: string; color: string }[] = [];
       if (cursors.length === 2) {
@@ -251,7 +268,7 @@ export function WaveformViewer({ result, traces, stacked, onStacked, fileBase }:
       box(rows, M.l + pw, M.t + 8);
     } else if (hover !== null && !zoomBox) {
       const xv = fromPx(hover);
-      vline(xv, '#777', [4, 3]);
+      vline(xv, tok('--plot-hover'), [4, 3]);
       const rows = [{ text: `${xLabel} = ${formatSI(xv, xUnit)}`, color: INK }, ...series.map((s) => ({ text: `${s.label} = ${formatSI(interpAt(s.x, s.y, xv), s.unit)}`, color: s.color }))];
       const bw = Math.max(...rows.map((r) => g.measureText(r.text).width)) + 16;
       const px = M.l + (hover - M.l);

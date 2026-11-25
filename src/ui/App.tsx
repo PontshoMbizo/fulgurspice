@@ -6,8 +6,13 @@ import { emptySchematic } from '../core/types';
 import { formatSI } from '../core/units';
 import { SimClient, type EngineState } from '../sim/client';
 import { currentNames, explain, type SimResult } from '../sim/result';
-import { IconDelete, IconFit, IconMirror, IconProbe, IconRedo, IconRotate, IconRun, IconSelect, IconStop, IconUndo, IconWire } from './Icons';
+import {
+  IconActivity, IconChevronDown, IconCircleAlert, IconCircleCheck, IconCircuitBoard, IconDelete, IconFileText, IconFit, IconMaximize2, IconMinimize2, IconMinus,
+  IconMirror, IconPanelLeft, IconPanelRight, IconPlus, IconProbe, IconRedo, IconRotate, IconRuler, IconRun, IconSelect, IconStop, IconTerminal, IconUndo, IconWire, IconX,
+} from './Icons';
+import { InlineField } from './Field';
 import { Inspector } from './Inspector';
+import { PartsLibrary } from './PartsLibrary';
 import { MenuBar } from './Menus';
 import { QuickAdd } from './QuickAdd';
 import { SchematicCanvas, type Placing, type ProbeTarget, type Tool } from './SchematicCanvas';
@@ -56,7 +61,7 @@ export function App() {
   // Trace-math expressions the user has typed; they become traces named after themselves.
   const [exprs, setExprs] = useState<string[]>([]);
   const [exprText, setExprText] = useState('');
-  const [dockH, setDockH] = useState(280);
+  const [dockH, setDockH] = useState(() => Math.min(240, Math.round(window.innerHeight * 0.3)));
   // The whole bottom panel (waveform, measurements, netlist, log) can be put away; a run brings it back.
   const [dockOpen, setDockOpen] = useState(true);
   const [fitToken, setFitToken] = useState(0);
@@ -67,6 +72,15 @@ export function App() {
   const [quickAdd, setQuickAdd] = useState(false);
   const [waveOpen, setWaveOpen] = useState(true);
   const clipboard = useRef<{ clip: Clipboard; pastes: number } | null>(null);
+  // Layout only: the parts library (a drawer on a phone), the Properties overlay on narrow
+  // screens, the results dock maximised over the workspace, and the zoom buttons.
+  const narrow = () => window.matchMedia('(max-width: 520px)').matches;
+  const [libOpen, setLibOpen] = useState(() => !narrow());
+  const [propsOpen, setPropsOpen] = useState(false);
+  const [dockMax, setDockMax] = useState(false);
+  const [zoomReq, setZoomReq] = useState({ token: 0, factor: 1 });
+  const zoomBy = (factor: number) => setZoomReq((z) => ({ token: z.token + 1, factor }));
+  useEffect(() => { if (!dockOpen) setDockMax(false); }, [dockOpen]);
 
   useEffect(() => saveLocal(sch), [sch]);
   // Fetch the engine shortly after first paint so the first Run does not wait for 20 MB.
@@ -322,9 +336,9 @@ export function App() {
   };
 
   return (
-    <div className="fulgur">
+    <div className={`fulgur${libOpen ? ' lib-open' : ''}${propsOpen ? ' props-open' : ''}${dockOpen && dockMax ? ' results-max' : ''}`}>
       <div className="menubar">
-        <span className="brand">fulgurspice</span>
+        <span className="brand"><span className="brand-mark"><IconCircuitBoard /></span>fulgurspice</span>
         <MenuBar menus={[
           { title: 'File', items: [
             { label: 'New', run: () => load(emptySchematic(), 'New schematic') },
@@ -370,22 +384,20 @@ export function App() {
           ] },
           { title: 'View', items: [
             { label: 'Zoom to fit', shortcut: 'F', run: () => setFitToken((t) => t + 1) },
+            { label: 'Zoom in', run: () => zoomBy(1.25) },
+            { label: 'Zoom out', run: () => zoomBy(0.8) },
+            { separator: true },
+            { label: libOpen ? 'Hide parts library' : 'Show parts library', run: () => setLibOpen((o) => !o) },
             { label: 'Bottom panel', shortcut: 'Ctrl+J', run: () => setDockOpen((o) => !o) },
+            { label: dockMax ? 'Restore results' : 'Maximise results', disabled: !dockOpen, run: () => setDockMax((m) => !m) },
             { label: 'Show waveform', disabled: dockOpen && waveOpen && tab === 'wave', run: showWave },
           ] },
         ]} />
-        {editing !== null && (
-          <span className="sheet-crumb">
-            <button type="button" className="btn" onClick={closeSubckt} title="Back to the top sheet (Esc)">◂ Top sheet</button>
-            <span> › subcircuit <strong>{editing}</strong></span>
-          </span>
-        )}
-        <span className="model-name">{sch.title}</span>
         <input ref={fileInput} type="file" accept=".json,application/json" hidden onChange={(e) => { void open(e.target.files?.[0]); e.target.value = ''; }} />
       </div>
 
       <div className="toolbar" role="toolbar" aria-label="Tools">
-        <button type="button" className="run-btn" title="Run simulation (F5)" aria-label="Run simulation" disabled={busy} onClick={() => void run()}><IconRun /></button>
+        <button type="button" className="run-btn" title="Run simulation (F5)" aria-label="Run simulation" disabled={busy} onClick={() => void run()}><IconRun size={13} />{busy ? 'Running…' : 'Run'}</button>
         <button type="button" className="tb" title="Stop" aria-label="Stop" disabled={!busy} onClick={stop}><IconStop /></button>
         <span className="tb-sep" />
         <button type="button" className="tb" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!doc.past.length} onClick={() => dispatch({ type: 'undo' })}><IconUndo /></button>
@@ -395,20 +407,63 @@ export function App() {
         <button type="button" className="tb" title="Wire (W)" aria-label="Wire" aria-pressed={tool === 'wire'} onClick={() => { setTool('wire'); setPlacing(null); }}><IconWire /></button>
         <button type="button" className="tb" title="Probe (P)" aria-label="Probe" aria-pressed={tool === 'probe'} onClick={() => { setTool('probe'); setPlacing(null); }}><IconProbe /></button>
         <span className="tb-sep" />
-        <button type="button" className="tb" title="Rotate (R)" aria-label="Rotate" disabled={!selected.length && tool !== 'place'} onClick={rotate}><IconRotate /></button>
-        <button type="button" className="tb" title="Mirror (X)" aria-label="Mirror" disabled={!selected.length && tool !== 'place'} onClick={mirror}><IconMirror /></button>
+        <button type="button" className="tb tb-optional" title="Rotate (R)" aria-label="Rotate" disabled={!selected.length && tool !== 'place'} onClick={rotate}><IconRotate /></button>
+        <button type="button" className="tb tb-optional" title="Mirror (X)" aria-label="Mirror" disabled={!selected.length && tool !== 'place'} onClick={mirror}><IconMirror /></button>
         <button type="button" className="tb" title="Delete (Del)" aria-label="Delete" disabled={!selected.length} onClick={del}><IconDelete /></button>
         <span className="tb-sep" />
-        <button type="button" className="tb" title="Zoom to fit (F)" aria-label="Zoom to fit" onClick={() => setFitToken((t) => t + 1)}><IconFit /></button>
-        <span className="tb-note mono">{compiled.netlist.split('\n').find((l) => /^\.(tran|ac|dc|op)\b/.test(l))}</span>
+        <button type="button" className="tb" title="Parts library" aria-label="Toggle parts library" aria-pressed={libOpen} onClick={() => setLibOpen((o) => !o)}><IconPanelLeft /></button>
+        <div className="run-settings">
+          {sch.analysis.kind === 'tran' ? (() => {
+            const a = sch.analysis;
+            return <>
+              <InlineField label="Stop" title="Transient stop time, seconds" value={a.stop} onCommit={(v) => onRoot({ analysis: { ...a, stop: v } })} />
+              <InlineField label="Step" title="Maximum time step" className="step-field" value={a.step} onCommit={(v) => onRoot({ analysis: { ...a, step: v } })} />
+            </>;
+          })() : (
+            <span className="tb-note mono">{compiled.netlist.split('\n').find((l) => /^\.(tran|ac|dc|op)\b/.test(l))}</span>
+          )}
+        </div>
+        <button type="button" className="tb props-toggle" title="Properties" aria-label="Toggle properties" aria-pressed={propsOpen} onClick={() => setPropsOpen((o) => !o)}><IconPanelRight /><span className="control-word">Properties</span></button>
       </div>
 
       <div className="workspace">
-        <SchematicCanvas
-          sch={sheet} compiled={view} selection={selection} tool={tool} placing={placing}
-          probeColors={resultOf === editing ? probeColors : new Map()} opValues={resultOf === editing ? opValues : null} errorParts={errorParts} fitToken={fitToken}
-          onCommit={commit} onSelect={setSelected} onProbe={onProbe} onCancel={cancelTool} onCursor={setCursor} onZoom={setZoom} onOpenSubckt={openSubckt}
-        />
+        {libOpen && (
+          <PartsLibrary
+            active={tool === 'place' && placing ? placing.kind : null} activeSubckt={tool === 'place' && placing?.kind === 'SUBCKT' ? placing.value ?? null : null}
+            subckts={sch.subckts} canPlacePort={editing !== null}
+            onPick={(kind) => { pick(kind); if (narrow()) setLibOpen(false); }}
+            onPickSubckt={(name) => { pickSubckt(name); if (narrow()) setLibOpen(false); }}
+          />
+        )}
+        <div className="center">
+          <div className="canvas-header">
+            <nav className="breadcrumb" aria-label="Sheet path">
+              <IconCircuitBoard size={13} />
+              {editing !== null ? <>
+                <button type="button" className="crumb-link model-name" onClick={closeSubckt} title="Back to the top sheet (Esc)">{sch.title || 'Untitled'}</button>
+                <span>/</span>
+                <span>subcircuit <strong>{editing}</strong></span>
+              </> : <>
+                <span className="model-name">{sch.title || 'Untitled'}</span>
+                <span>/</span>
+                <strong>Schematic</strong>
+              </>}
+            </nav>
+            <button type="button" className="icon-btn" title="Zoom to fit (F)" aria-label="Zoom to fit" onClick={() => setFitToken((t) => t + 1)}><IconFit /></button>
+          </div>
+          <div className="stage">
+            <SchematicCanvas
+              sch={sheet} compiled={view} selection={selection} tool={tool} placing={placing}
+              probeColors={resultOf === editing ? probeColors : new Map()} opValues={resultOf === editing ? opValues : null} errorParts={errorParts} fitToken={fitToken} zoomRequest={zoomReq}
+              onCommit={commit} onSelect={setSelected} onProbe={onProbe} onCancel={cancelTool} onCursor={setCursor} onZoom={setZoom} onOpenSubckt={openSubckt}
+            />
+            <div className="zoom-pill">
+              <button type="button" className="icon-btn" title="Zoom out" aria-label="Zoom out" onClick={() => zoomBy(0.8)}><IconMinus size={13} /></button>
+              <span>{Math.round(zoom * 50)}%</span>
+              <button type="button" className="icon-btn" title="Zoom in" aria-label="Zoom in" onClick={() => zoomBy(1.25)}><IconPlus size={13} /></button>
+            </div>
+          </div>
+        </div>
         <Inspector sch={sheet} compiled={view} selection={selection} onCommit={commit} onSelect={setSelected} onRotate={rotate} onMirror={mirror} onDelete={del} editing={editing} onOpenSubckt={openSubckt} onRoot={onRoot} onRenameSubckt={renameOpen} onSubcktParams={setSubcktParams} onMakeSubckt={askMakeSubckt} onDeleteSubckt={() => { if (editing !== null) { deleteSubckt(editing); setEdit(null); } }} />
       </div>
 
@@ -419,35 +474,37 @@ export function App() {
             {(['wave', 'meas', 'netlist', 'log'] as const).filter((t) => (t !== 'wave' || waveOpen) && (t !== 'meas' || measurements.length > 0)).map((t) => (
               <span key={t} className={`dock-tab${tab === t ? ' is-active' : ''}`}>
                 <button type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
-                  {t === 'wave' ? 'Waveform' : t === 'meas' ? `Measurements (${measurements.length})` : t === 'netlist' ? 'Netlist' : 'ngspice log'}
+                  {t === 'wave' ? <><IconActivity size={14} />Waveforms</> : t === 'meas' ? <><IconRuler size={14} />Measurements ({measurements.length})</> : t === 'netlist' ? <><IconFileText size={14} />Netlist</> : <><IconTerminal size={14} />Log</>}
                 </button>
-                {t === 'wave' && <button type="button" className="dock-tab-close" aria-label="Close waveform tab" title="Close waveform tab" onClick={closeWave}>×</button>}
+                {t === 'wave' && <button type="button" className="dock-tab-close" aria-label="Close waveform tab" title="Close waveform tab" onClick={closeWave}><IconX size={12} /></button>}
               </span>
             ))}
           </div>
-          {tab === 'wave' && shown?.ok && shown.kind !== 'op' && (
-            <>
-              {traces.map((name, i) => (
-                <span key={name} className="trace-chip" style={{ color: traceColor(i) }}>
-                  {shown.vectors.find((v) => v.name === name)?.label ?? name}
-                  <button type="button" aria-label={`Remove ${name}`} onClick={() => toggleTrace(name)}>×</button>
-                </span>
-              ))}
-              <select value="" aria-label="Add trace" onChange={(e) => { if (e.target.value) toggleTrace(e.target.value); }}>
-                <option value="">Add trace…</option>
-                {available.map((v) => <option key={v.name} value={v.name}>{v.label}</option>)}
-              </select>
-              <input
-                className="expr-input" aria-label="Trace math" value={exprText} spellCheck={false}
-                placeholder="Trace math: V(out)/V(in)"
-                onChange={(e) => setExprText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addExpr(); } }}
-              />
-              <span className="dock-note">drag: zoom · wheel: y zoom · click: cursors A, B · dbl-click: reset</span>
-            </>
-          )}
-          <button type="button" className="dock-hide" title="Hide the bottom panel (Ctrl+J)" aria-label="Hide the bottom panel" onClick={() => setDockOpen(false)}>Hide ⌄</button>
+          <span className="dock-spacer" />
+          <button type="button" className="icon-btn" title={dockMax ? 'Restore the workspace' : 'Maximise results'} aria-label={dockMax ? 'Restore the workspace' : 'Maximise results'} aria-pressed={dockMax} onClick={() => setDockMax((m) => !m)}>{dockMax ? <IconMinimize2 /> : <IconMaximize2 />}</button>
+          <button type="button" className="icon-btn dock-hide" title="Hide the bottom panel (Ctrl+J)" aria-label="Hide the bottom panel" onClick={() => setDockOpen(false)}><IconChevronDown /></button>
         </div>
+        {tab === 'wave' && shown?.ok && shown.kind !== 'op' && (
+          <div className="dock-legend">
+            {traces.map((name, i) => (
+              <span key={name} className="trace-chip" style={{ color: traceColor(i) }}>
+                {shown.vectors.find((v) => v.name === name)?.label ?? name}
+                <button type="button" aria-label={`Remove ${name}`} onClick={() => toggleTrace(name)}>×</button>
+              </span>
+            ))}
+            <select value="" aria-label="Add trace" onChange={(e) => { if (e.target.value) toggleTrace(e.target.value); }}>
+              <option value="">Add trace…</option>
+              {available.map((v) => <option key={v.name} value={v.name}>{v.label}</option>)}
+            </select>
+            <input
+              className="expr-input" aria-label="Trace math" value={exprText} spellCheck={false}
+              placeholder="Trace math: V(out)/V(in)"
+              onChange={(e) => setExprText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addExpr(); } }}
+            />
+            <span className="dock-note">drag: zoom · wheel: y zoom · click: cursors A, B · dbl-click: reset</span>
+          </div>
+        )}
         <div className="dock-body">
           {tab === 'netlist' && <pre className="dock-text">{(bench ?? compiled).netlist}</pre>}
           {tab === 'meas' && (
@@ -492,10 +549,12 @@ export function App() {
       {naming && <NamePrompt title={naming === 'new' ? 'New subcircuit' : 'Make subcircuit from selection'} problem={(n) => subcktNameProblem(sch, n)} onSubmit={naming === 'new' ? createSubckt : makeFromSelection} onClose={() => setNaming(null)} />}
 
       <div className="statusbar">
-        <span className={`status-main${status.error ? ' is-error' : ''}`} role="status">{status.text}</span>
+        <span className={`status-main${status.error ? ' is-error' : ''}`}>
+          {status.error ? <IconCircleAlert size={13} /> : busy ? <IconActivity size={13} /> : <IconCircleCheck size={13} />}
+          <span role="status">{status.text}</span>
+        </span>
         <button type="button" className="status-cell status-toggle" aria-pressed={dockOpen} title="Show or hide the bottom panel (Ctrl+J)" onClick={() => setDockOpen((o) => !o)}>{dockOpen ? 'Panel ⌄' : 'Panel ⌃'}</button>
         <span className="status-cell mono">{cursor ? `x ${cursor.x}  y ${cursor.y}` : 'x –  y –'}</span>
-        <span className="status-cell mono">{Math.round(zoom * 50)}%</span>
         <span className="status-cell">{sheet.parts.filter((p) => p.ref).length} parts · {view.nodes.length} nets</span>
         <span className="status-cell status-engine">{ENGINE_NAME[engine]}</span>
       </div>
