@@ -9,7 +9,9 @@ import { emptySchematic, type Part, type PartKind, type Point, type Rot, type Sc
 
 export interface Doc { sch: Schematic; past: Schematic[]; future: Schematic[] }
 /** `sheet`: when set, `sch` is that subcircuit's sheet and is merged back into the document. */
-export type DocAction = { type: 'commit'; sch: Schematic; sheet?: string | null } | { type: 'load'; sch: Schematic } | { type: 'undo' } | { type: 'redo' };
+export type DocAction = { type: 'commit'; sch: Schematic; sheet?: string | null } | { type: 'load'; sch: Schematic } | { type: 'undo' } | { type: 'redo' }
+  /** Set the analysis and/or sweep on whatever the document is by then (a host's settings update). No-op when unchanged. */
+  | { type: 'setRun'; analysis?: Schematic['analysis']; sweep?: Schematic['sweep'] };
 
 const HISTORY = 200;
 
@@ -17,6 +19,11 @@ export function docReducer(doc: Doc, action: DocAction): Doc {
   switch (action.type) {
     case 'commit': { const sch = normalizeAll(withSheet(doc.sch, action.sheet ?? null, action.sch)); return sch === doc.sch ? doc : { sch, past: [...doc.past.slice(-HISTORY + 1), doc.sch], future: [] }; }
     case 'load': return { sch: normalizeAll(action.sch), past: [], future: [] };
+    case 'setRun': {
+      const analysis = action.analysis ?? doc.sch.analysis, sweep = action.sweep ?? doc.sch.sweep;
+      if (JSON.stringify(analysis) === JSON.stringify(doc.sch.analysis) && JSON.stringify(sweep) === JSON.stringify(doc.sch.sweep)) return doc;
+      return { sch: { ...doc.sch, analysis, sweep }, past: [...doc.past.slice(-HISTORY + 1), doc.sch], future: [] };
+    }
     case 'undo': return doc.past.length ? { sch: doc.past[doc.past.length - 1], past: doc.past.slice(0, -1), future: [doc.sch, ...doc.future] } : doc;
     case 'redo': return doc.future.length ? { sch: doc.future[0], past: [...doc.past, doc.sch], future: doc.future.slice(1) } : doc;
   }
@@ -236,6 +243,7 @@ export function parseSchematic(text: string): Schematic {
     if (p.kind === 'SUBCKT' && Array.isArray(p.ports)) part.ports = p.ports.map(String);
     if (p.kind === 'SUBCKT' && typeof p.params === 'string' && p.params.trim()) part.params = p.params;
     if (p.bench) part.bench = true;
+    if (p.locked) part.locked = true;
     return part;
   };
   const parseWire = (w: Wire): Wire => ({ id: String(w.id || uid()), x1: int(w.x1), y1: int(w.y1), x2: int(w.x2), y2: int(w.y2) });

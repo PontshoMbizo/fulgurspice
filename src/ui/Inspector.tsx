@@ -50,11 +50,20 @@ interface Props {
   onMakeSubckt: () => void;
   /** Delete the open subcircuit (instances of it keep their name and report it missing). */
   onDeleteSubckt: () => void;
+  /** scope.io, a learner: locked parts are read-only and can't be deleted. */
+  enforceLocks?: boolean;
+  /** scope.io, an author: show the Locked checkbox. */
+  canLock?: boolean;
+  /** scope.io: the analysis and sweep are the problem's. */
+  analysisLocked?: boolean;
 }
 
-export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRotate, onMirror, onDelete, editing, onOpenSubckt, onRoot, onRenameSubckt, onSubcktParams, onMakeSubckt, onDeleteSubckt }: Props) {
+export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRotate, onMirror, onDelete, editing, onOpenSubckt, onRoot, onRenameSubckt, onSubcktParams, onMakeSubckt, onDeleteSubckt, enforceLocks = false, canLock = false, analysisLocked = false }: Props) {
   const parts = sch.parts.filter((p) => selection.has(p.id));
   const part = selection.size === 1 && parts.length === 1 ? parts[0] : null;
+  const frozen = enforceLocks && !!part?.locked;
+  const anyFrozen = enforceLocks && parts.some((p) => p.locked);
+  const allFrozen = enforceLocks && parts.length > 0 && parts.length === selection.size && parts.every((p) => p.locked);
   const def = part ? symbolFor(part) : null;
   const a = sch.analysis;
   const setA = (next: Analysis) => onRoot({ analysis: next });
@@ -67,8 +76,9 @@ export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRota
   const defParams = editing !== null ? (sch.subckts.find((d) => d.name === editing)?.params ?? '') : '';
 
   const analysisFieldset = (
-    <fieldset className="etched">
+    <fieldset className="etched" disabled={analysisLocked}>
       <legend>Analysis</legend>
+      {analysisLocked && <p className="hint">Set by the problem, so every answer runs on the same time or frequency grid.</p>}
       <label className="param">
         <span>Type</span>
         <select value={a.kind} onChange={(e) => setA(DEFAULTS[e.target.value as Analysis['kind']])}>
@@ -110,10 +120,11 @@ export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRota
         {part && def ? (
           <fieldset className="etched">
             <legend>Properties</legend>
-            {def.prefix && <Field label="Reference" value={part.ref} mono onCommit={(v) => onCommit(patchParts(sch, selection, () => ({ ref: v.trim() })))} />}
-            {def.valueLabel && <Field label={def.valueLabel} value={part.value} hint={def.valueHint} mono onCommit={(v) => onCommit(patchParts(sch, selection, () => ({ value: v })))} />}
-            {(part.kind === 'V' || part.kind === 'I') && <SourceEditor key={part.id} value={part.value} unit={part.kind === 'V' ? 'V' : 'A'} onCommit={(v) => onCommit(patchParts(sch, selection, () => ({ value: v })))} />}
-            {part.kind === 'SUBCKT' && <Field label="Parameters" value={part.params ?? ''} mono hint="Override defaults, e.g. R=2k C=47n" onCommit={(v) => onCommit(patchParts(sch, selection, () => ({ params: v.trim() || undefined })))} />}
+            {frozen && <p className="hint">Locked by the problem: you can move, rotate and wire it, but not change or delete it.</p>}
+            {def.prefix && <Field label="Reference" value={part.ref} mono disabled={frozen} onCommit={(v) => onCommit(patchParts(sch, selection, () => ({ ref: v.trim() })))} />}
+            {def.valueLabel && <Field label={def.valueLabel} value={part.value} hint={def.valueHint} mono disabled={frozen} onCommit={(v) => onCommit(patchParts(sch, selection, () => ({ value: v })))} />}
+            {(part.kind === 'V' || part.kind === 'I') && !frozen && <SourceEditor key={part.id} value={part.value} unit={part.kind === 'V' ? 'V' : 'A'} onCommit={(v) => onCommit(patchParts(sch, selection, () => ({ value: v })))} />}
+            {part.kind === 'SUBCKT' && <Field label="Parameters" value={part.params ?? ''} mono disabled={frozen} hint="Override defaults, e.g. R=2k C=47n" onCommit={(v) => onCommit(patchParts(sch, selection, () => ({ params: v.trim() || undefined })))} />}
             {editing !== null && part.kind !== 'PORT' && (
               <label className="check" title="Drawn and simulated when this sheet is run on its own, but not part of the subcircuit">
                 <input type="checkbox" checked={!!part.bench} onChange={(e) => setBench(e.target.checked)} /> Test bench only
@@ -124,10 +135,15 @@ export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRota
                 <button type="button" className="btn" disabled={!part.value.trim()} onClick={() => onOpenSubckt(part.value.trim())}>Open subcircuit</button>
               </div>
             )}
+            {canLock && !enforceLocks && (
+              <label className="check" title="Learners can move and wire it, but not change or delete it">
+                <input type="checkbox" checked={!!part.locked} onChange={(e) => onCommit(patchParts(sch, selection, () => ({ locked: e.target.checked || undefined })))} /> Locked for learners
+              </label>
+            )}
             <div className="row-buttons">
               <button type="button" className="btn" onClick={onRotate}>Rotate</button>
               <button type="button" className="btn" onClick={onMirror}>Mirror</button>
-              <button type="button" className="btn btn-delete" onClick={onDelete}>Delete</button>
+              {!frozen && <button type="button" className="btn btn-delete" onClick={onDelete}>Delete</button>}
             </div>
             {(part.refOffset || part.valueOffset) && (
               <div className="row-buttons">
@@ -141,10 +157,11 @@ export function Inspector({ sch, compiled, selection, onCommit, onSelect, onRota
             <div className="row-buttons">
               <button type="button" className="btn" onClick={onRotate} disabled={!parts.length}>Rotate</button>
               <button type="button" className="btn" onClick={onMirror} disabled={!parts.length}>Mirror</button>
-              <button type="button" className="btn btn-delete" onClick={onDelete}>Delete</button>
+              {!allFrozen && <button type="button" className="btn btn-delete" onClick={onDelete}>Delete</button>}
             </div>
+            {anyFrozen && <p className="hint">Locked parts in the selection stay when you delete it.</p>}
             <div className="row-buttons">
-              <button type="button" className="btn" disabled={!parts.length} title="Move the selection into a new subcircuit and put an instance in its place" onClick={onMakeSubckt}>Make subcircuit…</button>
+              <button type="button" className="btn" disabled={!parts.length || anyFrozen} title={anyFrozen ? 'The selection has locked parts' : 'Move the selection into a new subcircuit and put an instance in its place'} onClick={onMakeSubckt}>Make subcircuit…</button>
               {editing !== null && parts.length > 0 && <button type="button" className="btn" onClick={() => setBench(!parts.every((q) => q.bench))}>{parts.every((q) => q.bench) ? 'Part of subcircuit' : 'Test bench only'}</button>}
             </div>
           </fieldset>

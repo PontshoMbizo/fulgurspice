@@ -46,9 +46,10 @@
 - [ ] Phase 4 follow-ups: example circuits for the new parts; centre-tapped transformer; EXP / SFFM in the source editor
 
 ## Phase 5 — scope.io integration
-- [ ] Embed API: mount in an iframe / as a component with a template schematic and locked parts (mirror fulgurlab's `docs/embedding.md`)
-- [ ] Problem format: template schematic + target spec (`f_-3dB = 1 kHz ± 5 %`, `ripple < 50 mV`)
-- [ ] Server-side grading: same netlist through ngspice in fulgurlab's hardened container, `.meas`-based checks
+- [x] **DONE** Embed API: iframe + scope.io's `scopeio:*` protocol (`src/ui/scopeio.ts`, `docs/embedding.md`): modes export / capture / solve, locked parts, locked analysis and load sweep, `scopeio:change` drafts
+- [x] **DONE** Grading capture: `src/sim/capture.ts` resamples the graded net onto the analysis step grid (transient) or gives dB / degrees (AC), one run per sweep value; `test/capture.test.ts` checks it against RC theory with real ngspice
+- [x] **DONE** Problem format lives in scope.io: template schematic, probes, analysis, and waveform-match or spec checks (`f3dB`, `overshootPct`, …) graded there from the posted capture
+- [ ] Server-side grading: same netlist through ngspice in fulgurlab's hardened container (today scope.io trusts the browser's capture, like its other simulators)
 - [ ] Netlist sanitiser for the server path (no `.control`, no file access, whitelisted directives)
 
 ## Phase 6 — stretch
