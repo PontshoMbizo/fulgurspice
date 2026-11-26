@@ -24,11 +24,20 @@ import { SUBCKT_NAME } from '../core/symbols';
 import { WaveformViewer, traceColor } from './WaveformViewer';
 import { evaluate, measurementsOf, mergeSweep, withDerived } from '../sim/analysis';
 import { parseSweep } from '../core/params';
+import { captureForGrading } from '../sim/capture';
+import { announceReady, listenForInit, sendChange, sendResult, type InitMessage, type Mode } from './scopeio';
 
 const ANALYSIS_NAME = { tran: 'Transient', ac: 'AC sweep', dc: 'DC sweep', op: 'Operating point' } as const;
 const ENGINE_NAME: Record<EngineState, string> = { idle: 'ngspice: not loaded', loading: 'ngspice: loading…', ready: 'ngspice: ready', running: 'ngspice: running…' };
 
 const initDoc = (): Doc => ({ sch: loadSaved() ?? EXAMPLES[0].build(), past: [], future: [] });
+
+/** scope.io's action button for each mode; `run` = simulate first and send the grading capture. */
+const ACTION: Record<Mode, { label: string; run: boolean }> = {
+  export: { label: 'Save starter', run: false },
+  capture: { label: 'Capture golden', run: true },
+  solve: { label: 'Submit', run: true },
+};
 
 export function App() {
   const [doc, dispatch] = useReducer(docReducer, undefined, initDoc);
@@ -82,7 +91,38 @@ export function App() {
   const zoomBy = (factor: number) => setZoomReq((z) => ({ token: z.token + 1, factor }));
   useEffect(() => { if (!dockOpen) setDockMax(false); }, [dockOpen]);
 
-  useEffect(() => saveLocal(sch), [sch]);
+  // scope.io (or another host) driving us through scopeio:init. Null when standalone or plainly framed.
+  const [host, setHost] = useState<InitMessage | null>(null);
+  const enforceLocks = host?.mode === 'solve';
+  const analysisLocked = !!host && (host.config.lockAnalysis ?? host.mode !== 'export');
+  const seeded = useRef(false);
+  const loadRef = useRef<(next: Schematic, note: string) => void>(() => {});
+  useEffect(() => {
+    const off = listenForInit((m) => {
+      setHost(m);
+      // The host may send init more than once (on our ready, on iframe load, and when its settings
+      // change): seed only once, but keep the problem's analysis and sweep in step with the host.
+      // Through the reducer, not a ref of the document: a second init can arrive before React has
+      // rendered the seeded one, and patching the stale document would undo the seed.
+      if (seeded.current) {
+        if (m.config.analysis || m.config.sweep) dispatch({ type: 'setRun', analysis: m.config.analysis, sweep: m.config.sweep });
+        return;
+      }
+      seeded.current = true;
+      let next = emptySchematic();
+      if (m.starterCode.trim()) {
+        try { next = parseSchematic(m.starterCode); } catch (err) { setStatus({ text: `The problem's schematic could not be read: ${err instanceof Error ? err.message : String(err)}`, error: true }); }
+      }
+      if (m.config.analysis) next = { ...next, analysis: m.config.analysis };
+      if (m.config.sweep) next = { ...next, sweep: m.config.sweep };
+      loadRef.current(next, m.mode === 'solve' ? 'Problem loaded. Press Submit when your circuit is ready.' : 'Problem schematic loaded');
+    });
+    announceReady();
+    return off;
+  }, []);
+
+  // Standalone: autosave in this browser. Under a host: the host keeps the draft.
+  useEffect(() => { if (host) sendChange(JSON.stringify(sch)); else saveLocal(sch); }, [sch, host]);
   // Fetch the engine shortly after first paint so the first Run does not wait for 20 MB.
   useEffect(() => { const t = setTimeout(() => void client.warm(), 600); return () => clearTimeout(t); }, [client]);
 
@@ -96,13 +136,14 @@ export function App() {
     setFitToken((t) => t + 1);
     say(note);
   };
+  loadRef.current = load;
 
-  const run = useCallback(async (whole = false) => {
-    if (busy) return;
+  const run = useCallback(async (whole = false): Promise<SimResult | null> => {
+    if (busy) return null;
     // On a subcircuit sheet with a test bench, Run simulates that sheet on its own.
     const alone = !whole && bench !== null && editing !== null;
     const target = alone ? bench : compiled;
-    if (!target.ok) { say(target.issues.find((i) => i.level === 'error')!.message, true); return; }
+    if (!target.ok) { say(target.issues.find((i) => i.level === 'error')!.message, true); return null; }
     setBusy(true);
     say(client.state === 'ready' ? 'Simulating…' : 'Loading ngspice (about 20 MB, first run only)…');
     try {
@@ -121,7 +162,7 @@ export function App() {
         r = failed ?? mergeSweep(sweep.param, sweep.values.map((v) => v.tag), runs);
       } else r = await client.run(target.netlist, sch.analysis.kind);
       setResult(r); setResultOf(alone ? editing : null); setTab('wave'); setWaveOpen(true); setDockOpen(true);
-      if (!r.ok) { say(explain(r.messages[0]) ?? r.messages[0], true); return; }
+      if (!r.ok) { say(explain(r.messages[0]) ?? r.messages[0], true); return r; }
       const goodExprs = exprs.filter((e) => evaluate(e, r).ok);
       setExprs(goodExprs);
       setTraces((old) => {
@@ -134,15 +175,40 @@ export function App() {
       // ngspice often limps through a broken circuit; do not let a plot hide that.
       if (r.messages.length) say(`${summary}, with warnings. ${explain(r.messages[0]) ?? r.messages[0]}`, true);
       else say(summary);
+      return r;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       say(explain(msg) ? `${msg}. ${explain(msg)}` : msg, true);
+      return null;
     } finally {
       setBusy(false);
     }
   }, [busy, client, compiled, sch, sheet, bench, editing, exprs, sweep]);
 
   const stop = () => client.cancel();
+
+  /** scope.io's button: save the starter, or run the whole circuit and send what the grader needs. */
+  const doAction = async () => {
+    if (!host) return;
+    const code = JSON.stringify(sch);
+    if (!ACTION[host.mode].run) { sendResult({ code, ok: true }); say('Starter sent to scope.io'); return; }
+    if (!compiled.ok) {
+      const msg = compiled.issues.find((i) => i.level === 'error')!.message;
+      say(msg, true);
+      sendResult({ code, ok: false, netlist: compiled.netlist, log: msg });
+      return;
+    }
+    const r = await run(true);
+    if (!r) return; // stopped, or it could not start (the status bar says why)
+    if (!r.ok) {
+      sendResult({ code, ok: false, netlist: compiled.netlist, log: r.messages.map((m) => (explain(m) ? `${m}\n  ${explain(m)}` : m)).join('\n') || 'ngspice could not simulate this circuit' });
+      return;
+    }
+    const c = captureForGrading(r, sch.analysis, host.config.probes ?? { output: 'out' });
+    if (!c.ok) { say(c.error, true); sendResult({ code, ok: false, netlist: compiled.netlist, log: c.error }); return; }
+    sendResult({ code, ok: true, netlist: compiled.netlist, capture: c.capture });
+    say(host.mode === 'solve' ? 'Submitted to scope.io for grading' : 'Golden run sent to scope.io');
+  };
   const showWave = () => { setWaveOpen(true); setTab('wave'); setDockOpen(true); };
   const closeWave = () => { setWaveOpen(false); setTab((t) => (t === 'wave' ? 'netlist' : t)); };
 
@@ -205,6 +271,7 @@ export function App() {
   };
   // Check the selection before asking for a name, so a bad one fails at once with the reason.
   const askMakeSubckt = () => {
+    if (enforceLocks && sheet.parts.some((p) => selection.has(p.id) && p.locked)) { say('The selection has locked parts, which must stay where the problem put them', true); return; }
     const dry = makeSubckt(sch, editing, selection, 'TMP_CHECK');
     if (!dry.ok) { say(dry.error, true); return; }
     setNaming('extract');
@@ -228,7 +295,14 @@ export function App() {
     if (tool === 'place' && placing) setPlacing({ ...placing, mirror: !placing.mirror });
     else if (selected.length) commit(patchParts(sheet, selection, (p) => ({ mirror: !p.mirror })));
   };
-  const del = () => { if (selected.length) { commit(deleteItems(sheet, selection)); setSelected([]); } };
+  const del = () => {
+    if (!selected.length) return;
+    // a learner can't delete the parts the problem locked; the rest of the selection goes
+    const gone = enforceLocks ? new Set([...selection].filter((id) => !sheet.parts.some((p) => p.id === id && p.locked))) : selection;
+    if (gone.size < selection.size) say('Locked parts stay: the problem needs them', true);
+    if (gone.size) commit(deleteItems(sheet, gone));
+    setSelected([]);
+  };
 
   const copy = () => {
     if (!selected.length) return false;
@@ -336,11 +410,14 @@ export function App() {
   };
 
   return (
-    <div className={`fulgur${libOpen ? ' lib-open' : ''}${propsOpen ? ' props-open' : ''}${dockOpen && dockMax ? ' results-max' : ''}`}>
+    <div className={`fulgur${libOpen ? ' lib-open' : ''}${propsOpen ? ' props-open' : ''}${dockOpen && dockMax ? ' results-max' : ''}${host?.config.theme === 'light' ? ' theme-light' : ''}`}>
       <div className="menubar">
         <span className="brand"><span className="brand-mark"><IconCircuitBoard /></span>fulgurspice</span>
         <MenuBar menus={[
-          { title: 'File', items: [
+          // Under scope.io the problem decides what is on the sheet: no New, Open or Examples.
+          { title: 'File', items: host ? [
+            { label: 'Save a copy', shortcut: 'Ctrl+S', run: save },
+          ] : [
             { label: 'New', run: () => load(emptySchematic(), 'New schematic') },
             { label: 'Open…', run: () => fileInput.current?.click() },
             { label: 'Save', shortcut: 'Ctrl+S', run: save },
@@ -398,6 +475,7 @@ export function App() {
 
       <div className="toolbar" role="toolbar" aria-label="Tools">
         <button type="button" className="run-btn" title="Run simulation (F5)" aria-label="Run simulation" disabled={busy} onClick={() => void run()}><IconRun size={13} />{busy ? 'Running…' : 'Run'}</button>
+        {host && <button type="button" className="run-btn action-btn" title={ACTION[host.mode].label} disabled={busy} onClick={() => void doAction()}><IconCircleCheck size={13} />{ACTION[host.mode].label}</button>}
         <button type="button" className="tb" title="Stop" aria-label="Stop" disabled={!busy} onClick={stop}><IconStop /></button>
         <span className="tb-sep" />
         <button type="button" className="tb" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!doc.past.length} onClick={() => dispatch({ type: 'undo' })}><IconUndo /></button>
@@ -416,8 +494,8 @@ export function App() {
           {sch.analysis.kind === 'tran' ? (() => {
             const a = sch.analysis;
             return <>
-              <InlineField label="Stop" title="Transient stop time, seconds" value={a.stop} onCommit={(v) => onRoot({ analysis: { ...a, stop: v } })} />
-              <InlineField label="Step" title="Maximum time step" className="step-field" value={a.step} onCommit={(v) => onRoot({ analysis: { ...a, step: v } })} />
+              <InlineField label="Stop" title="Transient stop time, seconds" value={a.stop} disabled={analysisLocked} onCommit={(v) => onRoot({ analysis: { ...a, stop: v } })} />
+              <InlineField label="Step" title="Maximum time step" className="step-field" value={a.step} disabled={analysisLocked} onCommit={(v) => onRoot({ analysis: { ...a, step: v } })} />
             </>;
           })() : (
             <span className="tb-note mono">{compiled.netlist.split('\n').find((l) => /^\.(tran|ac|dc|op)\b/.test(l))}</span>
@@ -464,7 +542,7 @@ export function App() {
             </div>
           </div>
         </div>
-        <Inspector sch={sheet} compiled={view} selection={selection} onCommit={commit} onSelect={setSelected} onRotate={rotate} onMirror={mirror} onDelete={del} editing={editing} onOpenSubckt={openSubckt} onRoot={onRoot} onRenameSubckt={renameOpen} onSubcktParams={setSubcktParams} onMakeSubckt={askMakeSubckt} onDeleteSubckt={() => { if (editing !== null) { deleteSubckt(editing); setEdit(null); } }} />
+        <Inspector sch={sheet} compiled={view} selection={selection} onCommit={commit} onSelect={setSelected} onRotate={rotate} onMirror={mirror} onDelete={del} editing={editing} onOpenSubckt={openSubckt} onRoot={onRoot} onRenameSubckt={renameOpen} onSubcktParams={setSubcktParams} onMakeSubckt={askMakeSubckt} onDeleteSubckt={() => { if (editing !== null) { deleteSubckt(editing); setEdit(null); } }} enforceLocks={enforceLocks} canLock={!!host && !enforceLocks} analysisLocked={analysisLocked} />
       </div>
 
       {dockOpen && <div className="dock" style={{ height: dockH }}>

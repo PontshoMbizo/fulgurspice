@@ -55,6 +55,13 @@ in the browser, on a grading server, or in desktop ngspice.
 | `test/` | Netlister, analysis, per-part and example tests; the engine tests run real ngspice |
 | `docs/` | [How-to guide](docs/how-to-use.md), example circuits, screenshots, [model licence notes](docs/model-licences.md) |
 
+## Using it in scope.io
+
+scope.io frames the app and drives it with its `scopeio:*` postMessage protocol: the problem's
+starter schematic goes in, and Submit sends back the schematic plus the graded net resampled for the
+grader. Parts can be locked for learners, and the analysis is fixed by the problem.
+[docs/embedding.md](docs/embedding.md) has the messages.
+
 ## Deploying
 
 The app is a static site. `npm run build` writes it to `dist/`, which any web server can serve.
@@ -87,7 +94,7 @@ passes, a second workflow deploys it to the project's own VM by running `deploy.
 - **Real part models** (1N4148, 2N3904/3906, 2N7000, LM358, TL072). Shelved: no vendor terms read
   allow bundling their files ([notes](docs/model-licences.md)). The likely route is our own models
   fitted to datasheet figures.
-- scope.io integration: an embeddable editor, problem definitions and server-side grading.
+- Server-side grading for scope.io: re-run submissions in a hardened container instead of trusting the browser's capture.
 - Offline caching of the engine; import of LTspice and KiCad files.
 
 [TASKS.md](TASKS.md) has the full list.

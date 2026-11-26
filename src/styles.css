@@ -78,7 +78,7 @@ html, body, #root { height: 100%; margin: 0; }
   position: relative;
 }
 @media (prefers-color-scheme: dark) {
-  .fulgur {
+  .fulgur:not(.theme-light) {
     --paper: #1c2026;
     --chrome: #252a32;
     --panel: #20252c;
@@ -374,3 +374,9 @@ html, body, #root { height: 100%; margin: 0; }
   .btn, .tb, .menu-title, .run-btn, .icon-btn { min-height: 40px; }
   .fulgur input:not([type='checkbox']), .fulgur select, .fulgur textarea { font-size: 16px; }
 }
+
+/* scope.io embedding: the problem's action button, and parts the problem has locked */
+.action-btn { background: var(--accent); border-color: var(--accent); color: var(--paper); }
+.action-btn .lucide { fill: none; }
+.part.is-locked .part-ref, .part.is-locked .part-value { font-style: italic; }
+.fulgur input:disabled, .fulgur select:disabled, .fulgur textarea:disabled { opacity: 0.6; }

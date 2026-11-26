@@ -41,6 +41,9 @@ export interface Part {
   /** Inside a subcircuit sheet only: part of the test bench, drawn and simulated when the
    * sheet is run on its own but left out of the definition and every instance. */
   bench?: boolean;
+  /** Fixed by a problem author (scope.io). While a learner solves the problem the part can be moved
+   * and wired but not deleted or given another value. Editor-only: the netlist ignores it. */
+  locked?: boolean;
 }
 
 export interface Wire {
